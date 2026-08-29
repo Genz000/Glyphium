@@ -13,8 +13,10 @@ to 4×, or as a real, editable SVG.
 
 - [Vite](https://vite.dev) + React 19 + TypeScript
 - Tailwind CSS v4 (CSS-first `@theme` tokens, no config file)
-- Hand-rolled [shadcn](https://ui.shadcn.com)-style components on
-  [Radix UI](https://www.radix-ui.com) primitives
+- [shadcn/ui](https://ui.shadcn.com) (new-york style) on
+  [Radix UI](https://www.radix-ui.com) primitives — installed through the
+  shadcn CLI and configured in `components.json`, so `npx shadcn@latest add …`
+  drops new components straight in
 - Self-hosted [Bricolage Grotesque](https://github.com/fonttools/fonts) +
   [JetBrains Mono](https://www.jetbrains.com/lp/mono/) via `@fontsource`
 
@@ -22,8 +24,20 @@ No external font or asset CDN is used — everything ships in the bundle.
 
 ## Design system
 
-The palette is locked, not eyeballed: a graphite ground with a periwinkle
-accent, checked against WCAG contrast before anything was built on top of it.
+The theme is written against shadcn's own token contract — `--background`,
+`--foreground`, `--card`, `--primary`, `--muted-foreground`, `--border`,
+`--input`, `--ring`, `--radius` — themed as **Darkroom**: a graphite ground
+with a periwinkle primary. Any shadcn component added later inherits the theme
+with no restyling.
+
+Glyphium is dark-only by intent, so the Darkroom values sit on `:root` and
+`<html>` carries `class="dark"` so shadcn's `dark:` variants resolve against
+the same palette. Adding a light theme means writing light values on `:root`
+and moving these into `.dark` — no component changes.
+
+Colours are hex rather than oklch on purpose: every pairing below was
+contrast-checked at these exact values, and converting colour space would move
+the ratios.
 
 | Pairing | Ratio | Grade |
 |---|---|---|
@@ -59,7 +73,7 @@ src/
   lib/ascii-engine.ts     pure conversion engine (sampling, tone mapping,
                            dithering, edge detection, PNG/SVG rendering)
   hooks/use-ascii-art.ts  React state <-> engine glue
-  components/ui/          shadcn-style primitives (Button, Slider, Select, …)
+  components/ui/          shadcn/ui primitives (Button, Slider, Select, …)
   components/             FileDrop, VibePicker, ToneLadder
   App.tsx                 control rail + preview stage
 ```

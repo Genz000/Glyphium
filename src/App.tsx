@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { ChevronDown } from "lucide-react"
+import { toast } from "sonner"
+
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Toaster } from "@/components/ui/sonner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+
 import { FileDrop } from "@/components/file-drop"
 import { VibePicker, ToneLadder } from "@/components/vibe-picker"
 import { useAsciiArt, type Source } from "@/hooks/use-ascii-art"
@@ -49,14 +58,6 @@ function download(blob: Blob, filename: string) {
 
 export default function App() {
   const [source, setSource] = useState<Source | null>(null)
-  const [toast, setToast] = useState<string | null>(null)
-  const toastTimer = useRef<number | undefined>(undefined)
-
-  const showToast = (msg: string) => {
-    setToast(msg)
-    window.clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => setToast(null), 2400)
-  }
 
   // grid / font controls -- a narrow screen cannot resolve 150 columns, so the
   // opening resolution is matched to the viewport. The slider still goes to 300.
@@ -177,7 +178,7 @@ export default function App() {
     cv.toBlob((b) => {
       if (b) {
         download(b, `${baseName()}@${scale}x.png`)
-        showToast(`Saved PNG — ${cv.width} × ${cv.height}`)
+        toast.success("Saved PNG", { description: `${cv.width} × ${cv.height} px at ${scale}×` })
       }
     }, "image/png")
   }
@@ -191,55 +192,53 @@ export default function App() {
     const H = Math.round(chh * grid.rows)
     const svg = gridToSVG(grid, fontPx, lh, fontFamily, paper, transparentBg, cw, W, H)
     download(new Blob([svg], { type: "image/svg+xml" }), `${baseName()}.svg`)
-    showToast(`Saved SVG — ${W} × ${H}`)
+    toast.success("Saved SVG", { description: `${W} × ${H} px, editable text` })
   }
 
   const copyText = async () => {
     if (!grid) return
     try {
       await navigator.clipboard.writeText(gridToText(grid))
-      showToast(`Copied ${grid.rows} lines`)
+      toast.success("Copied as text", { description: `${grid.rows} lines on the clipboard` })
     } catch {
-      showToast("Clipboard blocked — save as SVG instead")
+      toast.error("Clipboard blocked", { description: "Save as SVG to keep the text instead." })
     }
   }
 
   return (
-    <div className="grid h-dvh grid-cols-[336px_1fr] overflow-hidden max-md:h-auto max-md:grid-cols-1 max-md:overflow-auto">
-      {/* ---------------------------------------------------------------- rail */}
-      <aside className="flex min-h-0 flex-col border-r border-line bg-panel max-md:order-2 max-md:border-b max-md:border-r-0">
-        <header className="border-b border-line px-5 pb-4 pt-5">
-          <h1 className="font-display text-[22px] font-bold leading-none tracking-[-0.025em]">Glyphium</h1>
-          <p className="mt-2 text-[10px] uppercase tracking-[0.2em] text-dimmer">Image &rarr; glyph converter</p>
-        </header>
+    <TooltipProvider delayDuration={400}>
+      <div className="grid h-dvh grid-cols-[336px_1fr] overflow-hidden max-md:h-auto max-md:grid-cols-1 max-md:overflow-auto">
+        {/* -------------------------------------------------------------- rail */}
+        <aside className="flex min-h-0 flex-col border-r bg-card max-md:order-2 max-md:border-r-0 max-md:border-b">
+          <header className="border-b px-5 pb-4 pt-5">
+            <h1 className="font-display text-[22px] font-bold leading-none tracking-[-0.025em]">Glyphium</h1>
+            <p className="mt-2 text-[10px] uppercase tracking-[0.2em] text-annotation">Image &rarr; glyph converter</p>
+          </header>
 
-        <div className="scroller min-h-0 flex-1 overflow-y-auto max-md:overflow-visible">
-          <Card className="rounded-none border-x-0 border-t-0">
-            <CardHeader>Source <b className="font-normal text-dimmer">image / svg</b></CardHeader>
-            <CardContent>
+          <ScrollArea className="min-h-0 flex-1 max-md:h-auto">
+            <Section title="Source" meta="image / svg">
               <FileDrop
                 fileName={source?.name ?? "no file loaded"}
                 dims={source ? `${source.w} × ${source.h}` : "—"}
                 onLoad={(img, name) => setSource({ img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height, name })}
-                onError={(msg) => showToast(`Couldn't open file — ${msg}`)}
+                onError={(msg) => toast.error("Couldn't open that file", { description: msg })}
               />
-            </CardContent>
-          </Card>
+            </Section>
 
-          <Card className="rounded-none border-x-0 border-t-0">
-            <CardHeader>Grid <b className="font-normal text-dimmer">resolution</b></CardHeader>
-            <CardContent>
-              <FieldRow label="Columns" value={cols}>
-                <Slider min={30} max={300} step={1} value={[cols]} onValueChange={([v]) => setCols(v)} />
-              </FieldRow>
-              <FieldRow label="Row spacing" value={lh.toFixed(2)}>
-                <Slider min={0.75} max={1.6} step={0.01} value={[lh]} onValueChange={([v]) => setLh(v)} />
-              </FieldRow>
+            <Section title="Grid" meta="resolution">
+              <Control id="cols" label="Columns" value={cols}>
+                <Slider id="cols" min={30} max={300} step={1} value={[cols]} onValueChange={([v]) => setCols(v)} />
+              </Control>
+              <Control id="rowspace" label="Row spacing" value={lh.toFixed(2)}>
+                <Slider id="rowspace" min={0.75} max={1.6} step={0.01} value={[lh]} onValueChange={([v]) => setLh(v)} />
+              </Control>
 
               <div className="space-y-1.5">
-                <Label>Character set</Label>
+                <Label htmlFor="ramp" className="text-[11px] font-normal text-muted-foreground">Character set</Label>
                 <Select value={ramp} onValueChange={setRamp}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="ramp" size="sm" className="w-full text-[11.5px]">
+                    <SelectValue />
+                  </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="standard">Standard — .:-=+*#%@</SelectItem>
                     <SelectItem value="detailed">Detailed — 68 steps</SelectItem>
@@ -252,10 +251,11 @@ export default function App() {
                   </SelectContent>
                 </Select>
                 {ramp === "custom" && (
-                  <input
-                    className="w-full rounded border border-line bg-panel-2 px-2.5 py-2 text-[11.5px] focus:border-accent focus:outline-none"
+                  <Input
+                    className="h-8 text-[11.5px]"
                     value={customRamp}
                     spellCheck={false}
+                    aria-label="Custom character ramp"
                     placeholder="light → heavy, e.g. .-+#"
                     onChange={(e) => setCustomRamp(e.target.value.length >= 2 ? e.target.value : " .-+#")}
                   />
@@ -263,48 +263,49 @@ export default function App() {
               </div>
 
               <Options>
-                <ToggleRow label="Edge glyphs" checked={edges} onCheckedChange={setEdges} />
+                <ToggleRow id="edges" label="Edge glyphs" checked={edges} onCheckedChange={setEdges} />
                 {edges && (
-                  <FieldRow className="px-3 py-2.5" label="Edge sensitivity" value={edgeSensitivity.toFixed(2)}>
-                    <Slider min={0.05} max={1} step={0.01} value={[edgeSensitivity]} onValueChange={([v]) => setEdgeSensitivity(v)} />
-                  </FieldRow>
+                  <Control id="edge-sens" label="Edge sensitivity" value={edgeSensitivity.toFixed(2)} className="px-3 py-2.5">
+                    <Slider id="edge-sens" min={0.05} max={1} step={0.01} value={[edgeSensitivity]} onValueChange={([v]) => setEdgeSensitivity(v)} />
+                  </Control>
                 )}
               </Options>
-            </CardContent>
-          </Card>
+            </Section>
 
-          <Card className="rounded-none border-x-0 border-t-0">
-            <CardHeader>Tone <b className="font-normal text-dimmer">mapping</b></CardHeader>
-            <CardContent>
-              <FieldRow label="Brightness" value={(brightness > 0 ? "+" : "") + brightness.toFixed(2)}>
-                <Slider min={-0.5} max={0.5} step={0.01} value={[brightness]} onValueChange={([v]) => setBrightness(v)} />
-              </FieldRow>
-              <FieldRow label="Contrast" value={contrast.toFixed(2)}>
-                <Slider min={0.2} max={3} step={0.01} value={[contrast]} onValueChange={([v]) => setContrast(v)} />
-              </FieldRow>
-              <FieldRow label="Gamma" value={gamma.toFixed(2)}>
-                <Slider min={0.35} max={2.6} step={0.01} value={[gamma]} onValueChange={([v]) => setGamma(v)} />
-              </FieldRow>
+            <Section title="Tone" meta="mapping">
+              <Control id="brightness" label="Brightness" value={(brightness > 0 ? "+" : "") + brightness.toFixed(2)}>
+                <Slider id="brightness" min={-0.5} max={0.5} step={0.01} value={[brightness]} onValueChange={([v]) => setBrightness(v)} />
+              </Control>
+              <Control id="contrast" label="Contrast" value={contrast.toFixed(2)}>
+                <Slider id="contrast" min={0.2} max={3} step={0.01} value={[contrast]} onValueChange={([v]) => setContrast(v)} />
+              </Control>
+              <Control id="gamma" label="Gamma" value={gamma.toFixed(2)}>
+                <Slider id="gamma" min={0.35} max={2.6} step={0.01} value={[gamma]} onValueChange={([v]) => setGamma(v)} />
+              </Control>
 
               <div className="space-y-1.5">
-                <Label>Dither</Label>
-                <ToggleGroup type="single" value={dither} onValueChange={(v) => v && setDither(v as ToneSettings["dither"])}>
-                  <ToggleGroupItem value="none">None</ToggleGroupItem>
-                  <ToggleGroupItem value="ordered">Ordered</ToggleGroupItem>
-                  <ToggleGroupItem value="diffuse">Diffusion</ToggleGroupItem>
+                <Label className="text-[11px] font-normal text-muted-foreground">Dither</Label>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  value={dither}
+                  onValueChange={(v) => v && setDither(v as ToneSettings["dither"])}
+                  className="w-full"
+                >
+                  <ToggleGroupItem value="none" className="flex-1 text-[11px]">None</ToggleGroupItem>
+                  <ToggleGroupItem value="ordered" className="flex-1 text-[11px]">Ordered</ToggleGroupItem>
+                  <ToggleGroupItem value="diffuse" className="flex-1 text-[11px]">Diffusion</ToggleGroupItem>
                 </ToggleGroup>
               </div>
 
               <Options>
-                <ToggleRow label="Invert tones" checked={invert} onCheckedChange={setInvert} />
-                <ToggleRow label="Keep transparency" checked={alphaKeep} onCheckedChange={setAlphaKeep} />
+                <ToggleRow id="invert" label="Invert tones" checked={invert} onCheckedChange={setInvert} />
+                <ToggleRow id="alpha" label="Keep transparency" checked={alphaKeep} onCheckedChange={setAlphaKeep} />
               </Options>
-            </CardContent>
-          </Card>
+            </Section>
 
-          <Card className="rounded-none border-x-0 border-t-0">
-            <CardHeader>Colour <b className="font-normal text-dimmer">vibe</b></CardHeader>
-            <CardContent>
+            <Section title="Colour" meta="vibe">
               <VibePicker selected={vibeId} onSelect={selectVibe} />
 
               <div className="grid grid-cols-2 gap-2">
@@ -319,101 +320,139 @@ export default function App() {
                 />
               </div>
 
-              <FieldRow label="Ink strength" value={Math.round(inkStrength * 100) + "%"}>
-                <Slider min={0.2} max={1} step={0.01} value={[inkStrength]} onValueChange={([v]) => setInkStrength(v)} />
-              </FieldRow>
+              <Control id="ink" label="Ink strength" value={Math.round(inkStrength * 100) + "%"}>
+                <Slider id="ink" min={0.2} max={1} step={0.01} value={[inkStrength]} onValueChange={([v]) => setInkStrength(v)} />
+              </Control>
 
               <Options>
-                <ToggleRow label="Keep source colours" checked={srcColor} onCheckedChange={setSrcColor} />
+                <ToggleRow id="srccolor" label="Keep source colours" checked={srcColor} onCheckedChange={setSrcColor} />
                 {srcColor && (
-                  <FieldRow className="px-3 py-2.5" label="Tint toward vibe" value={Math.round(mix * 100) + "%"}>
-                    <Slider min={0} max={1} step={0.01} value={[mix]} onValueChange={([v]) => setMix(v)} />
-                  </FieldRow>
+                  <Control id="mix" label="Tint toward vibe" value={Math.round(mix * 100) + "%"} className="px-3 py-2.5">
+                    <Slider id="mix" min={0} max={1} step={0.01} value={[mix]} onValueChange={([v]) => setMix(v)} />
+                  </Control>
                 )}
-                <ToggleRow label="Transparent background" checked={transparentBg} onCheckedChange={setTransparentBg} />
+                <ToggleRow id="transparent" label="Transparent background" checked={transparentBg} onCheckedChange={setTransparentBg} />
               </Options>
-            </CardContent>
-          </Card>
-        </div>
+            </Section>
+          </ScrollArea>
 
-        <div className="border-t border-line bg-panel px-5 pb-4 pt-3.5">
-          <div className="mb-2 flex items-baseline justify-between text-[10px] uppercase tracking-[0.18em] text-dim">
-            <span>Export</span>
-            <span className="tabular-nums normal-case tracking-normal text-dimmer">
-              {exportSize ? `${exportSize.w} × ${exportSize.h}` : "—"}
-            </span>
+          <div className="border-t bg-card px-5 pb-4 pt-3.5">
+            <div className="mb-2 flex items-baseline justify-between text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+              <span>Export</span>
+              <span className="tabular-nums normal-case tracking-normal text-annotation">
+                {exportSize ? `${exportSize.w} × ${exportSize.h}` : "—"}
+              </span>
+            </div>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              value={String(scale)}
+              onValueChange={(v) => v && setScale(Number(v))}
+              className="w-full"
+            >
+              {[1, 2, 3, 4].map((s) => (
+                <ToggleGroupItem key={s} value={String(s)} className="flex-1 text-[11px]">
+                  {s}×
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <div className="mt-2 grid grid-cols-2 gap-1.5">
+              <Button size="sm" className="col-span-2" onClick={savePNG} disabled={!grid}>
+                Save PNG
+              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="sm" variant="outline" onClick={saveSVG} disabled={!grid}>
+                    Save SVG
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Vector file with real, editable text</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="sm" variant="outline" onClick={copyText} disabled={!grid}>
+                    Copy as text
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Plain glyphs, no colour</TooltipContent>
+              </Tooltip>
+            </div>
           </div>
-          <ToggleGroup type="single" value={String(scale)} onValueChange={(v) => v && setScale(Number(v))}>
-            {[1, 2, 3, 4].map((s) => (
-              <ToggleGroupItem key={s} value={String(s)}>{s}×</ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <div className="mt-2 grid grid-cols-2 gap-1.5">
-            <Button className="col-span-2" onClick={savePNG}>Save PNG</Button>
-            <Button variant="outline" onClick={saveSVG}>Save SVG</Button>
-            <Button variant="outline" onClick={copyText}>Copy as text</Button>
-          </div>
-        </div>
-      </aside>
+        </aside>
 
-      {/* --------------------------------------------------------------- stage */}
-      <main className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-mat max-md:sticky max-md:top-0 max-md:z-10 max-md:order-1 max-md:h-[52dvh]">
-        <div className="stage-ground" />
+        {/* ------------------------------------------------------------- stage */}
+        <main className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-mat max-md:sticky max-md:top-0 max-md:z-10 max-md:order-1 max-md:h-[52dvh]">
+          <div className="stage-ground" />
 
-        <div className="relative flex min-h-0 flex-1 flex-col items-center gap-4 px-7 pb-5 pt-7 max-md:gap-2.5 max-md:px-5 max-md:pb-3 max-md:pt-5">
-          <div ref={stageRef} className="flex min-h-0 w-full flex-1 items-center justify-center">
-            <div className="relative">
-              <canvas
-                ref={previewRef}
-                className={cn("block ring-1 ring-line-strong", transparentBg && "alpha-grid")}
-                aria-label={grid ? `ASCII render, ${grid.cols} by ${grid.rows} glyphs` : "No render"}
-              />
-              <span className="tick tick-tl" />
-              <span className="tick tick-tr" />
-              <span className="tick tick-bl" />
-              <span className="tick tick-br" />
+          <div className="relative flex min-h-0 flex-1 flex-col items-center gap-4 px-7 pb-5 pt-7 max-md:gap-2.5 max-md:px-5 max-md:pb-3 max-md:pt-5">
+            <div ref={stageRef} className="flex min-h-0 w-full flex-1 items-center justify-center">
+              <div className="relative">
+                <canvas
+                  ref={previewRef}
+                  className={cn("block ring-1 ring-input", transparentBg && "alpha-grid")}
+                  aria-label={grid ? `ASCII render, ${grid.cols} by ${grid.rows} glyphs` : "No render"}
+                />
+                <span className="tick tick-tl" />
+                <span className="tick tick-tr" />
+                <span className="tick tick-bl" />
+                <span className="tick tick-br" />
+              </div>
+            </div>
+
+            {/* Plate margin -- the render is annotated where a proof would be. */}
+            <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[10px] uppercase tracking-[0.15em]">
+              <Ann label="file" value={source?.name ?? "none"} />
+              <Ann label="source" value={source ? `${source.w}×${source.h}` : "—"} />
+              <Ann label="grid" value={grid ? `${grid.cols}×${grid.rows}` : "—"} />
+              <Ann label="glyphs" value={grid ? (grid.cols * grid.rows).toLocaleString() : "—"} />
+              <Ann label="render" value={`${renderMs} ms`} />
+              <Badge variant="outline" className="border-border px-2 py-0 text-[9.5px] uppercase tracking-[0.14em] text-annotation">
+                {srcColor ? "source colours" : "gradient ink"}
+              </Badge>
             </div>
           </div>
 
-          {/* Plate margin -- the render is annotated where a proof would be. */}
-          <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[10px] uppercase tracking-[0.15em]">
-            <Ann label="file" value={source?.name ?? "none"} />
-            <Ann label="source" value={source ? `${source.w}×${source.h}` : "—"} />
-            <Ann label="grid" value={grid ? `${grid.cols}×${grid.rows}` : "—"} />
-            <Ann label="glyphs" value={grid ? (grid.cols * grid.rows).toLocaleString() : "—"} />
-            <Ann label="render" value={`${renderMs} ms`} />
-          </div>
-        </div>
-
-        {/* Rendered even before the first grid exists, so the stage is measured
-            against its final height and the plate does not reflow on load. */}
-        <div className="relative shrink-0 border-t border-line bg-panel px-5 pb-3.5 pt-3 max-md:hidden">
-          <div className="mx-auto flex min-h-[31px] max-w-[760px] items-center gap-4">
-            <span className="shrink-0 text-[10px] uppercase tracking-[0.18em] text-dim">Tone ramp</span>
-            <div className="min-w-0 flex-1">
-              {grid && <ToneLadder paper={paper} stops={stops} set={grid.set} />}
+          {/* Rendered even before the first grid exists, so the stage is measured
+              against its final height and the plate does not reflow on load. */}
+          <div className="relative shrink-0 border-t bg-card px-5 pb-3.5 pt-3 max-md:hidden">
+            <div className="mx-auto flex min-h-[31px] max-w-[760px] items-center gap-4">
+              <span className="shrink-0 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Tone ramp</span>
+              <div className="min-w-0 flex-1">
+                {grid && <ToneLadder paper={paper} stops={stops} set={grid.set} />}
+              </div>
             </div>
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
 
-      {toast && (
-        <div
-          role="status"
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded border border-line-strong bg-panel-2 px-4 py-2.5 text-[11px] tracking-wide shadow-xl"
-        >
-          {toast}
-        </div>
-      )}
-    </div>
+      <Toaster position="bottom-right" toastOptions={{ className: "font-mono text-[11.5px]" }} />
+    </TooltipProvider>
+  )
+}
+
+/** A rail section. Collapsible so a long control stack can be folded down to
+ *  the parts you are actually working on. */
+function Section({ title, meta, children }: { title: string; meta: string; children: ReactNode }) {
+  return (
+    <Collapsible defaultOpen className="border-b">
+      <CollapsibleTrigger className="group flex w-full items-center gap-2 px-5 py-3.5 text-[10px] uppercase tracking-[0.18em] outline-none transition-colors hover:bg-accent/40 focus-visible:ring-[3px] focus-visible:ring-ring/50">
+        <span className="text-muted-foreground">{title}</span>
+        <span className="text-annotation">{meta}</span>
+        <ChevronDown className="ml-auto size-3.5 shrink-0 text-annotation transition-transform duration-200 group-data-[state=closed]:-rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+        <div className="space-y-3.5 px-5 pb-4">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
 function Ann({ label, value }: { label: string; value: string }) {
   return (
     <span className="flex items-baseline gap-1.5">
-      <span className="text-dimmer">{label}</span>
-      <b className="max-w-[22ch] truncate font-normal normal-case tracking-[0.06em] text-dim">{value}</b>
+      <span className="text-annotation">{label}</span>
+      <b className="max-w-[22ch] truncate font-normal normal-case tracking-[0.06em] text-muted-foreground">{value}</b>
     </span>
   )
 }
@@ -421,15 +460,17 @@ function Ann({ label, value }: { label: string; value: string }) {
 /** Boolean settings gathered into one block, so they read as a group instead of
  *  as more rows in the slider stack. */
 function Options({ children }: { children: ReactNode }) {
-  return <div className="divide-y divide-line rounded border border-line bg-panel-2/50">{children}</div>
+  return <div className="divide-y rounded-md border bg-muted/40">{children}</div>
 }
 
-function FieldRow({
+function Control({
+  id,
   label,
   value,
   children,
   className,
 }: {
+  id: string
   label: string
   value: string | number
   children: ReactNode
@@ -437,35 +478,54 @@ function FieldRow({
 }) {
   return (
     <div className={cn("space-y-1.5", className)}>
-      <div className="flex items-center justify-between text-[10.5px] tracking-wide text-dim">
-        <span>{label}</span>
-        <var className="not-italic tabular-nums text-ink">{value}</var>
+      <div className="flex items-center justify-between">
+        <Label htmlFor={id} className="text-[11px] font-normal text-muted-foreground">
+          {label}
+        </Label>
+        <output htmlFor={id} className="text-[11px] tabular-nums text-foreground">
+          {value}
+        </output>
       </div>
       {children}
     </div>
   )
 }
 
-function ToggleRow({ label, checked, onCheckedChange }: { label: string; checked: boolean; onCheckedChange: (v: boolean) => void }) {
+function ToggleRow({
+  id,
+  label,
+  checked,
+  onCheckedChange,
+}: {
+  id: string
+  label: string
+  checked: boolean
+  onCheckedChange: (v: boolean) => void
+}) {
   return (
-    <label className="flex cursor-pointer items-center justify-between gap-2.5 px-3 py-2.5 text-[11.5px]">
-      <span>{label}</span>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} />
-    </label>
+    <div className="flex items-center justify-between gap-2.5 px-3 py-2.5">
+      <Label htmlFor={id} className="cursor-pointer text-[11.5px] font-normal">
+        {label}
+      </Label>
+      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
+    </div>
   )
 }
 
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const id = `colour-${label.toLowerCase()}`
   return (
-    <div className="flex items-center gap-2 rounded border border-line bg-panel-2 px-2 py-1.5">
+    <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
       <input
+        id={id}
         type="color"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        aria-label={label}
-        className="h-[22px] w-[22px] cursor-pointer rounded-sm border border-line-strong bg-transparent p-0"
+        className="size-[22px] cursor-pointer rounded-sm border border-input bg-transparent p-0"
       />
-      <Label>{label}</Label>
+      <Label htmlFor={id} className="cursor-pointer text-[11px] font-normal text-muted-foreground">
+        {label}
+      </Label>
     </div>
   )
 }

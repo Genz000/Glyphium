@@ -98,13 +98,13 @@ export function FileDrop({
           loadFile(e.dataTransfer.files[0])
         }}
         className={cn(
-          "border border-dashed rounded p-4 text-center cursor-pointer transition-colors bg-panel-2",
-          hot ? "border-accent bg-accent-soft" : "border-line-strong hover:border-accent"
+          "border border-dashed rounded p-4 text-center cursor-pointer transition-colors bg-muted/40",
+          hot ? "border-primary bg-primary/10" : "border-input hover:border-primary"
         )}
       >
-        <Upload className="mx-auto mb-1.5 h-4 w-4 text-dim" />
+        <Upload className="mx-auto mb-1.5 h-4 w-4 text-muted-foreground" />
         <b className="block text-[11.5px] font-medium">Drop a file, or click to browse</b>
-        <small className="text-dimmer text-[10px] tracking-wide">PNG · JPG · WEBP · GIF · SVG</small>
+        <small className="text-annotation text-[10px] tracking-wide">PNG · JPG · WEBP · GIF · SVG</small>
       </div>
       <input
         ref={inputRef}
@@ -116,8 +116,8 @@ export function FileDrop({
           e.target.value = ""
         }}
       />
-      <div className="flex justify-between gap-2.5 text-[10.5px] text-dim">
-        <b className="text-ink font-normal truncate">{fileName}</b>
+      <div className="flex justify-between gap-2.5 text-[10.5px] text-muted-foreground">
+        <b className="text-foreground font-normal truncate">{fileName}</b>
         <span className="shrink-0">{dims}</span>
       </div>
     </div>

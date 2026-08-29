@@ -25,12 +25,12 @@ export function VibePicker({
             onClick={() => onSelect(v)}
             aria-pressed={on}
             className={cn(
-              "rounded border text-left overflow-hidden transition-colors",
-              on ? "border-accent" : "border-line hover:border-line-strong"
+              "rounded-md border text-left overflow-hidden transition-colors",
+              on ? "border-primary" : "border-border hover:border-input"
             )}
           >
             <span className="block h-[26px]" style={{ background: g }} />
-            <span className={cn("block px-1.5 py-1 text-[10px] tracking-wide", on ? "text-accent" : "text-dim")}>
+            <span className={cn("block px-1.5 py-1 text-[10px] tracking-wide", on ? "text-primary" : "text-muted-foreground")}>
               {v.name}
             </span>
           </button>
