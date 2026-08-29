@@ -6,8 +6,9 @@ ASCII-art conversion for images and SVG, live in the browser — no server, no
 upload, no account. Drop in a photo or an SVG and it's rendered as monospace
 glyphs, colour-mapped through one of ten locked "vibe" palettes (or your own
 paper/ink colours), with control over grid resolution, tone curve,
-dithering, and edge-aware glyph selection for line art. Export as PNG at up
-to 4×, or as a real, editable SVG.
+dithering, and edge-aware glyph selection for line art. Four motion effects
+(Shimmer, Decode, Wave, Rain) animate the glyphs themselves, looping
+seamlessly. Export as PNG at up to 4×, or as a real, editable SVG.
 
 ## Stack
 
@@ -62,6 +63,15 @@ retype just that tone level — type a replacement or pick one from a small
 block of common glyphs — without hand-editing the whole ramp string. The first
 edit forks the active preset into a custom ramp; the rest of it is untouched.
 
+Motion is baked into the same tone-mapping step as everything else, not
+layered on top as a filter: each effect perturbs the tone field by loop
+phase before quantisation, so the animation is made of the same glyph
+selection a still render would use. Every effect is periodic in phase, so a
+full loop tiles back to its start with no seam. Pausing (or picking a
+different effect while paused) always lands back on the plain image rather
+than freezing mid-motion — space bar toggles play/pause from anywhere that
+isn't a text field.
+
 ## Getting started
 
 ```bash
@@ -87,14 +97,16 @@ src/
 
 This is a from-scratch React port of a working single-file prototype. Ported
 so far: file loading (image + SVG), grid resolution, character ramps
-(including custom), tone mapping (brightness/contrast/gamma), ordered and
-diffusion dithering, edge-aware glyphs, ten colour vibes with custom
-paper/ink, source-colour tinting, transparency, and PNG/SVG export.
+(including custom, editable per-glyph), tone mapping (brightness/contrast/
+gamma), ordered and diffusion dithering, edge-aware glyphs, ten colour vibes
+with custom paper/ink, source-colour tinting, transparency, the live motion
+system (Shimmer, Decode, Wave, Rain), and PNG/SVG export.
 
-Not yet ported from the prototype: pan/zoom stage controls, the motion
-system (Shimmer/Wave/Rain/Decode animation), and GIF/WebM/animated-SVG
-export. Straightforward to add on top of the same engine — the pixel
-sampling and grid-building functions are already frame-agnostic.
+Not yet ported from the prototype: pan/zoom stage controls, and baking the
+motion into a file (GIF/WebM/animated-SVG export) -- today, motion is a
+live preview only, with the still exports capturing whichever frame is
+current. Both are straightforward to add on top of the same engine -- the
+pixel sampling and grid-building functions are already frame-agnostic.
 
 ## License
 

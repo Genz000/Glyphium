@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, Pause, Play } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -17,8 +17,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 
 import { FileDrop } from "@/components/file-drop"
 import { VibePicker, ToneLadder } from "@/components/vibe-picker"
-import { useAsciiArt, type Source } from "@/hooks/use-ascii-art"
-import { clamp, gridToText, gridToSVG, RAMPS, type ToneSettings, type Vibe } from "@/lib/ascii-engine"
+import { frameCountFor, useAsciiArt, type MotionSettings, type Source } from "@/hooks/use-ascii-art"
+import { clamp, gridToText, gridToSVG, RAMPS, type AnimMode, type ToneSettings, type Vibe } from "@/lib/ascii-engine"
 import { cn } from "@/lib/utils"
 
 const DEMO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600">
@@ -85,6 +85,13 @@ export default function App() {
   const [inkStrength, setInkStrength] = useState(1)
   const [transparentBg, setTransparentBg] = useState(false)
 
+  // motion
+  const [animMode, setAnimMode] = useState<AnimMode>("none")
+  const [animAmount, setAnimAmount] = useState(0.45)
+  const [animDuration, setAnimDuration] = useState(2)
+  const [fps, setFps] = useState(20)
+  const [playing, setPlaying] = useState(false)
+
   const [scale, setScale] = useState(2)
 
   const tone: ToneSettings = useMemo(
@@ -108,7 +115,13 @@ export default function App() {
     [ramp, customRamp, edges, edgeSensitivity, brightness, contrast, gamma, dither, invert, alphaKeep, paper, stops, srcColor, mix, inkStrength]
   )
 
-  const { grid, renderMs, paintTo, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone)
+  const motion: MotionSettings = useMemo(
+    () => ({ mode: animMode, amount: animAmount, duration: animDuration, fps }),
+    [animMode, animAmount, animDuration, fps]
+  )
+  const frameCount = frameCountFor(motion)
+
+  const { grid, renderMs, paintTo, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone, motion, playing)
   const previewRef = useRef<HTMLCanvasElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 })
@@ -162,6 +175,21 @@ export default function App() {
     img.onload = () => setSource({ img, w: img.naturalWidth, h: img.naturalHeight, name: "demo-sphere.svg" })
     img.src = src
   }, [])
+
+  // Spacebar toggles playback, as long as focus isn't in a control that
+  // itself uses the key (a text field, a focused slider thumb, a button).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || animMode === "none") return
+      const el = document.activeElement
+      const tag = el?.tagName
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON" || (el as HTMLElement)?.isContentEditable) return
+      e.preventDefault()
+      setPlaying((p) => !p)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [animMode])
 
   const selectVibe = (v: Vibe) => {
     setVibeId(v.id)
@@ -248,6 +276,23 @@ export default function App() {
                 <span className="tick tick-tr" />
                 <span className="tick tick-bl" />
                 <span className="tick tick-br" />
+
+                {animMode !== "none" && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="outline"
+                        className="absolute bottom-2.5 right-2.5 bg-card/90 backdrop-blur-sm"
+                        onClick={() => setPlaying((p) => !p)}
+                        aria-label={playing ? "Pause animation" : "Play animation"}
+                      >
+                        {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{playing ? "Pause" : "Play"} — space</TooltipContent>
+                  </Tooltip>
+                )}
               </div>
             </div>
 
@@ -398,6 +443,67 @@ export default function App() {
                 )}
                 <ToggleRow id="transparent" label="Transparent background" checked={transparentBg} onCheckedChange={setTransparentBg} />
               </Options>
+            </Section>
+
+            <Section title="Motion" meta="animated glyphs">
+              <div className="space-y-1.5">
+                <Label htmlFor="anim-mode" className="text-[11px] font-normal text-muted-foreground">Effect</Label>
+                <Select
+                  value={animMode}
+                  onValueChange={(v) => {
+                    setAnimMode(v as AnimMode)
+                    if (v === "none") setPlaying(false) // nothing to play -- don't leave a stale Pause button
+                  }}
+                >
+                  <SelectTrigger id="anim-mode" size="sm" className="w-full text-[11.5px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None — still image</SelectItem>
+                    <SelectItem value="shimmer">Shimmer — glyphs breathe in place</SelectItem>
+                    <SelectItem value="decode">Decode — scramble, then resolve</SelectItem>
+                    <SelectItem value="wave">Wave — tone sweeps across</SelectItem>
+                    <SelectItem value="rain">Rain — columns fall</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {animMode !== "none" && (
+                <>
+                  <Control id="anim-amt" label="Amount" value={Math.round(animAmount * 100) + "%"}>
+                    <Slider id="anim-amt" min={0.05} max={1} step={0.01} value={[animAmount]} onValueChange={([v]) => setAnimAmount(v)} />
+                  </Control>
+                  <Control id="anim-dur" label="Loop length" value={animDuration.toFixed(1) + " s"}>
+                    <Slider id="anim-dur" min={0.5} max={6} step={0.1} value={[animDuration]} onValueChange={([v]) => setAnimDuration(v)} />
+                  </Control>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] font-normal text-muted-foreground">Frame rate</Label>
+                    <ToggleGroup
+                      type="single"
+                      variant="outline"
+                      size="sm"
+                      value={String(fps)}
+                      onValueChange={(v) => v && setFps(Number(v))}
+                      className="w-full"
+                    >
+                      {[10, 12, 20, 25].map((f) => (
+                        <ToggleGroupItem key={f} value={String(f)} className="flex-1 text-[11px]">
+                          {f}
+                        </ToggleGroupItem>
+                      ))}
+                    </ToggleGroup>
+                  </div>
+
+                  <Button size="sm" variant={playing ? "default" : "outline"} className="w-full gap-1.5" onClick={() => setPlaying((p) => !p)}>
+                    {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+                    {playing ? "Pause animation" : "Play animation"}
+                  </Button>
+                  <p className="text-center text-[10px] text-annotation">
+                    {frameCount} frames · {(frameCount / fps).toFixed(1)} s loop · {fps} fps
+                  </p>
+                </>
+              )}
             </Section>
           </ScrollArea>
 

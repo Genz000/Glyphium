@@ -88,6 +88,89 @@ export interface Grid {
   set: string[]
 }
 
+export type AnimMode = "none" | "shimmer" | "decode" | "wave" | "rain"
+
+export interface AnimSettings {
+  mode: AnimMode
+  /** Perturbation strength, 0..1. */
+  amount: number
+  /** Loop position, 0..1 -- every effect is periodic in phase so a full loop
+   *  tiles seamlessly back to its start. */
+  phase: number
+  /** Frames per loop, only consulted by "decode" (glyphs re-scramble once per
+   *  frame rather than continuously). */
+  frameCount: number
+}
+
+/** Stable per-cell pseudo-random value, 0..1 -- same (x, y) always hashes to
+ *  the same number, so effects can vary per-glyph without storing state. */
+function hash2(x: number, y: number): number {
+  let n = Math.imul(x, 374761393) + Math.imul(y, 668265263)
+  n = Math.imul(n ^ (n >>> 13), 1274126177)
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296
+}
+
+/** Perturbs `tone` in place for the current loop phase and, for "decode",
+ *  returns a per-cell glyph-index override (-1 = no override). Runs between
+ *  tone mapping and dithering so the motion is baked into the same glyphs a
+ *  still render would pick, rather than layered on top of them. */
+export function applyAnim(tone: Float32Array, cols: number, rows: number, anim: AnimSettings, levels: number): Int16Array | null {
+  const { mode, amount: amt, phase: p } = anim
+  const TAU = Math.PI * 2
+
+  if (mode === "shimmer") {
+    for (let y = 0; y < rows; y++)
+      for (let x = 0; x < cols; x++) {
+        const i = y * cols + x
+        tone[i] = clamp(tone[i] + amt * 0.5 * Math.sin(TAU * (p + hash2(x, y))), 0, 1)
+      }
+    return null
+  }
+
+  if (mode === "wave") {
+    for (let y = 0; y < rows; y++)
+      for (let x = 0; x < cols; x++) {
+        const i = y * cols + x
+        const u = (x / cols) * 0.75 + (y / rows) * 0.25
+        tone[i] = clamp(tone[i] + amt * 0.55 * Math.cos(TAU * (u - p)), 0, 1)
+      }
+    return null
+  }
+
+  if (mode === "rain") {
+    const trail = Math.max(4, rows * 0.4)
+    for (let x = 0; x < cols; x++) {
+      const cycles = 1 + Math.floor(hash2(x, 13) * 2) // integer cycles keep it seamless
+      const head = ((p * cycles + hash2(x, 7)) % 1) * (rows + trail) - trail * 0.5
+      for (let y = 0; y < rows; y++) {
+        const d = head - y
+        if (d < 0 || d > trail) continue
+        const f = d < 1 ? 1 : 1 - d / trail
+        const i = y * cols + x
+        tone[i] = clamp(tone[i] + amt * f, 0, 1)
+      }
+    }
+    return null
+  }
+
+  if (mode === "decode") {
+    const n = cols * rows
+    const override = new Int16Array(n).fill(-1)
+    const step = Math.floor(p * Math.max(2, anim.frameCount)) // glyphs re-scramble per frame
+    const q = p < 0.62 ? p / 0.62 : p < 0.85 ? 1 : 1 - (p - 0.85) / 0.15 // resolve, hold, dissolve
+    for (let y = 0; y < rows; y++)
+      for (let x = 0; x < cols; x++) {
+        const i = y * cols + x
+        if (tone[i] < 0.04) continue // keep the silhouette clean
+        const thr = hash2(x, y) * 0.75 + (y / rows) * 0.25
+        if (q < thr) override[i] = 1 + Math.floor(hash2(x * 31 + step, y * 17 + step * 7) * (levels - 1))
+      }
+    return override
+  }
+
+  return null
+}
+
 /** 256-entry tone -> css colour lookup, blended toward paper by ink strength */
 export function buildLUT(paper: string, stops: string[], strength: number): string[] {
   const paperRGB = hex2rgb(paper)
@@ -108,8 +191,10 @@ export function buildLUT(paper: string, stops: string[], strength: number): stri
   return lut
 }
 
-/** Build the glyph + colour grid from a sampled RGBA buffer. */
-export function buildGrid(rgba: Uint8ClampedArray, cols: number, rows: number, s: ToneSettings): Grid {
+/** Build the glyph + colour grid from a sampled RGBA buffer. `anim` is only
+ *  passed while a motion effect is playing -- omit it (or pass mode "none")
+ *  for a still render. */
+export function buildGrid(rgba: Uint8ClampedArray, cols: number, rows: number, s: ToneSettings, anim?: AnimSettings | null): Grid {
   const n = cols * rows
   const chars = s.ramp === "custom" ? s.customRamp || " .:-=+*#%@" : RAMPS[s.ramp]
   const set = Array.from(chars)
@@ -134,6 +219,11 @@ export function buildGrid(rgba: Uint8ClampedArray, cols: number, rows: number, s
     if (s.invert) t = 1 - t
     tone[i] = clamp(t, 0, 1)
   }
+
+  // Motion modulates tone before quantisation, so the glyphs themselves
+  // change rather than a filter running on top of a fixed image.
+  let override: Int16Array | null = null
+  if (anim && anim.mode !== "none") override = applyAnim(tone, cols, rows, anim, levels)
 
   const q = new Float32Array(tone)
   if (s.dither === "ordered") {
@@ -190,7 +280,12 @@ export function buildGrid(rgba: Uint8ClampedArray, cols: number, rows: number, s
       continue
     }
     let t = clamp(q[i], 0, 1)
-    let glyph = set[Math.min(levels - 1, Math.round(t * (levels - 1)))]
+    let gi = Math.min(levels - 1, Math.round(t * (levels - 1)))
+    if (override && override[i] >= 0) {
+      gi = Math.min(levels - 1, override[i])
+      t = Math.max(t, 0.4)
+    }
+    let glyph = set[gi]
 
     if (s.edges && mag && ang && mag[i] > thr) {
       const dir = ang[i] + Math.PI / 2
