@@ -207,14 +207,65 @@ export default function App() {
 
   return (
     <TooltipProvider delayDuration={400}>
-      <div className="grid h-dvh grid-cols-[336px_1fr] overflow-hidden max-md:h-auto max-md:grid-cols-1 max-md:overflow-auto">
-        {/* -------------------------------------------------------------- rail */}
-        <aside className="flex min-h-0 flex-col border-r bg-card max-md:order-2 max-md:border-r-0 max-md:border-b">
-          <header className="border-b px-5 pb-4 pt-5">
-            <h1 className="font-display text-[22px] font-bold leading-none tracking-[-0.025em]">Glyphium</h1>
-            <p className="mt-2 text-[10px] uppercase tracking-[0.2em] text-annotation">Image &rarr; glyph converter</p>
-          </header>
+      {/* Stage first in the DOM as well as on screen, so reading and tab order
+          both run left to right: wordmark, render, then the controls. */}
+      <div className="grid h-dvh grid-cols-[1fr_336px] overflow-hidden max-md:h-auto max-md:grid-cols-1 max-md:overflow-auto">
+        {/* ------------------------------------------------------------- stage */}
+        <main className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-mat max-md:sticky max-md:top-0 max-md:z-10 max-md:h-[52dvh]">
+          <div className="stage-ground" />
 
+          <div className="relative flex min-h-0 flex-1 flex-col gap-4 px-7 pb-5 pt-6 max-md:gap-2.5 max-md:px-5 max-md:pb-3 max-md:pt-4">
+            {/* The maker's mark, printed on the mount board. */}
+            <header className="shrink-0">
+              <h1 className="font-display text-[22px] font-bold leading-none tracking-[-0.025em] max-md:text-[19px]">
+                Glyphium
+              </h1>
+              <p className="mt-2 text-[10px] uppercase tracking-[0.2em] text-annotation max-md:mt-1.5">
+                Image &rarr; glyph converter
+              </p>
+            </header>
+
+            <div ref={stageRef} className="flex min-h-0 w-full flex-1 items-center justify-center">
+              <div className="relative">
+                <canvas
+                  ref={previewRef}
+                  className={cn("block ring-1 ring-input", transparentBg && "alpha-grid")}
+                  aria-label={grid ? `ASCII render, ${grid.cols} by ${grid.rows} glyphs` : "No render"}
+                />
+                <span className="tick tick-tl" />
+                <span className="tick tick-tr" />
+                <span className="tick tick-bl" />
+                <span className="tick tick-br" />
+              </div>
+            </div>
+
+            {/* Plate margin -- the render is annotated where a proof would be. */}
+            <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[10px] uppercase tracking-[0.15em]">
+              <Ann label="file" value={source?.name ?? "none"} />
+              <Ann label="source" value={source ? `${source.w}×${source.h}` : "—"} />
+              <Ann label="grid" value={grid ? `${grid.cols}×${grid.rows}` : "—"} />
+              <Ann label="glyphs" value={grid ? (grid.cols * grid.rows).toLocaleString() : "—"} />
+              <Ann label="render" value={`${renderMs} ms`} />
+              <Badge variant="outline" className="border-border px-2 py-0 text-[9.5px] uppercase tracking-[0.14em] text-annotation">
+                {srcColor ? "source colours" : "gradient ink"}
+              </Badge>
+            </div>
+          </div>
+
+          {/* Rendered even before the first grid exists, so the stage is measured
+              against its final height and the plate does not reflow on load. */}
+          <div className="relative shrink-0 border-t bg-card px-5 pb-3.5 pt-3 max-md:hidden">
+            <div className="mx-auto flex min-h-[31px] max-w-[760px] items-center gap-4">
+              <span className="shrink-0 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Tone ramp</span>
+              <div className="min-w-0 flex-1">
+                {grid && <ToneLadder paper={paper} stops={stops} set={grid.set} />}
+              </div>
+            </div>
+          </div>
+        </main>
+
+        {/* -------------------------------------------------------------- rail */}
+        <aside className="flex min-h-0 flex-col border-l bg-card max-md:border-b max-md:border-l-0">
           <ScrollArea className="min-h-0 flex-1 max-md:h-auto">
             <Section title="Source" meta="image / svg">
               <FileDrop
@@ -380,50 +431,6 @@ export default function App() {
             </div>
           </div>
         </aside>
-
-        {/* ------------------------------------------------------------- stage */}
-        <main className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-mat max-md:sticky max-md:top-0 max-md:z-10 max-md:order-1 max-md:h-[52dvh]">
-          <div className="stage-ground" />
-
-          <div className="relative flex min-h-0 flex-1 flex-col items-center gap-4 px-7 pb-5 pt-7 max-md:gap-2.5 max-md:px-5 max-md:pb-3 max-md:pt-5">
-            <div ref={stageRef} className="flex min-h-0 w-full flex-1 items-center justify-center">
-              <div className="relative">
-                <canvas
-                  ref={previewRef}
-                  className={cn("block ring-1 ring-input", transparentBg && "alpha-grid")}
-                  aria-label={grid ? `ASCII render, ${grid.cols} by ${grid.rows} glyphs` : "No render"}
-                />
-                <span className="tick tick-tl" />
-                <span className="tick tick-tr" />
-                <span className="tick tick-bl" />
-                <span className="tick tick-br" />
-              </div>
-            </div>
-
-            {/* Plate margin -- the render is annotated where a proof would be. */}
-            <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[10px] uppercase tracking-[0.15em]">
-              <Ann label="file" value={source?.name ?? "none"} />
-              <Ann label="source" value={source ? `${source.w}×${source.h}` : "—"} />
-              <Ann label="grid" value={grid ? `${grid.cols}×${grid.rows}` : "—"} />
-              <Ann label="glyphs" value={grid ? (grid.cols * grid.rows).toLocaleString() : "—"} />
-              <Ann label="render" value={`${renderMs} ms`} />
-              <Badge variant="outline" className="border-border px-2 py-0 text-[9.5px] uppercase tracking-[0.14em] text-annotation">
-                {srcColor ? "source colours" : "gradient ink"}
-              </Badge>
-            </div>
-          </div>
-
-          {/* Rendered even before the first grid exists, so the stage is measured
-              against its final height and the plate does not reflow on load. */}
-          <div className="relative shrink-0 border-t bg-card px-5 pb-3.5 pt-3 max-md:hidden">
-            <div className="mx-auto flex min-h-[31px] max-w-[760px] items-center gap-4">
-              <span className="shrink-0 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Tone ramp</span>
-              <div className="min-w-0 flex-1">
-                {grid && <ToneLadder paper={paper} stops={stops} set={grid.set} />}
-              </div>
-            </div>
-          </div>
-        </main>
       </div>
 
       <Toaster position="bottom-right" toastOptions={{ className: "font-mono text-[11.5px]" }} />
