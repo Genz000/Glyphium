@@ -18,7 +18,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { FileDrop } from "@/components/file-drop"
 import { VibePicker, ToneLadder } from "@/components/vibe-picker"
 import { useAsciiArt, type Source } from "@/hooks/use-ascii-art"
-import { clamp, gridToText, gridToSVG, type ToneSettings, type Vibe } from "@/lib/ascii-engine"
+import { clamp, gridToText, gridToSVG, RAMPS, type ToneSettings, type Vibe } from "@/lib/ascii-engine"
 import { cn } from "@/lib/utils"
 
 const DEMO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600">
@@ -169,6 +169,18 @@ export default function App() {
     setStops(v.stops)
   }
 
+  /** Retype one glyph in the active ramp without touching the rest of it.
+   *  A preset ramp is read-only as a string, so the first edit forks it into
+   *  the custom ramp -- the sidebar's character-set select follows along. */
+  const editRampChar = (index: number, ch: string) => {
+    const active = ramp === "custom" ? customRamp : RAMPS[ramp]
+    const chars = Array.from(active)
+    if (index < 0 || index >= chars.length) return
+    chars[index] = ch
+    setCustomRamp(chars.join(""))
+    if (ramp !== "custom") setRamp("custom")
+  }
+
   const baseName = () => (source?.name.replace(/\.[^.]+$/, "") || "glyphium") + "-ascii"
 
   const savePNG = () => {
@@ -256,9 +268,11 @@ export default function App() {
               against its final height and the plate does not reflow on load. */}
           <div className="relative shrink-0 border-t bg-card px-5 pb-3.5 pt-3 max-md:hidden">
             <div className="mx-auto flex min-h-[31px] max-w-[760px] items-center gap-4">
-              <span className="shrink-0 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Tone ramp</span>
+              <span className="shrink-0 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                Tone ramp <span className="normal-case tracking-normal text-annotation">— click a glyph to retype it</span>
+              </span>
               <div className="min-w-0 flex-1">
-                {grid && <ToneLadder paper={paper} stops={stops} set={grid.set} />}
+                {grid && <ToneLadder paper={paper} stops={stops} set={grid.set} onEditChar={editRampChar} />}
               </div>
             </div>
           </div>

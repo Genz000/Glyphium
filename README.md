@@ -57,6 +57,11 @@ with file, source size, grid, glyph count, and render time. The preview is
 repainted at whatever scale it is actually displayed at — including device
 pixel ratio — so glyphs stay crisp instead of being stretched by the browser.
 
+The tone ramp printed under the stage doubles as an editor: click any glyph to
+retype just that tone level — type a replacement or pick one from a small
+block of common glyphs — without hand-editing the whole ramp string. The first
+edit forks the active preset into a custom ramp; the rest of it is untouched.
+
 ## Getting started
 
 ```bash
