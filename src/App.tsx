@@ -107,6 +107,7 @@ export default function App() {
 
   const [scale, setScale] = useState(2)
   const [frameId, setFrameId] = useState<FrameId>("source")
+  const [imgScale, setImgScale] = useState(1)
   const frameRatio = FRAMES.find((f) => f.id === frameId)?.ratio ?? null
 
   const tone: ToneSettings = useMemo(
@@ -136,7 +137,7 @@ export default function App() {
   )
   const frameCount = frameCountFor(motion)
 
-  const { grid, renderMs, paintTo, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone, motion, playing, frameRatio)
+  const { grid, renderMs, paintTo, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone, motion, playing, frameRatio, imgScale)
   const previewRef = useRef<HTMLCanvasElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 })
@@ -372,6 +373,19 @@ export default function App() {
                 onLoad={(img, name) => setSource({ img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height, name })}
                 onError={(msg) => toast.error("Couldn't open that file", { description: msg })}
               />
+
+              {/* Sizes the image inside the frame: 100% is the fitted size,
+                  smaller leaves paper around it, larger zooms in. */}
+              <Control id="img-scale" label="Image scale" value={Math.round(imgScale * 100) + "%"}>
+                <Slider id="img-scale" min={0.1} max={3} step={0.01} value={[imgScale]} onValueChange={([v]) => setImgScale(v)} />
+              </Control>
+              {imgScale !== 1 && (
+                <div className="-mt-1.5 flex justify-end">
+                  <Button size="xs" variant="ghost" className="text-[10.5px] text-muted-foreground" onClick={() => setImgScale(1)}>
+                    Reset to fit
+                  </Button>
+                </div>
+              )}
             </Section>
 
             <Section title="Grid" meta="resolution">

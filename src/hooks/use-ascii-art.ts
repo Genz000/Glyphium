@@ -53,28 +53,30 @@ function rasterOf(src: Source): HTMLCanvasElement {
   return cv
 }
 
-/** Draw the source into a cols x rows sample grid, center-cropped so it fills
- *  the whole frame -- no letterboxing. Grid cells aren't square, so the crop is
- *  worked out in pixel-aspect space (cellAspect), not in cell counts. */
-function drawCover(ctx: CanvasRenderingContext2D, src: Source, cols: number, rows: number, cellAr: number) {
+/** Place the whole source in a cols x rows sample grid. At scale 1 it's sized
+ *  to cover the frame -- filling it edge to edge, overflow cropped, never
+ *  letterboxed. Scale then grows or shrinks it about the centre: below 1 the
+ *  cropped edges come back into view with paper around them, above 1 it zooms
+ *  in. Grid cells aren't square, so sizes are worked out in pixel-aspect space
+ *  (cellAr = cell width / height), not in raw cell counts. */
+function drawPlaced(ctx: CanvasRenderingContext2D, src: Source, cols: number, rows: number, cellAr: number, scale: number) {
   const raster = rasterOf(src)
-  const P = (cols * cellAr) / rows // pixel aspect of the whole grid
-  const ia = raster.width / raster.height
-  let sw = raster.width
-  let sh = raster.height
-  let sx = 0
-  let sy = 0
+  const ia = raster.width / raster.height // image pixel aspect
+  const P = (cols * cellAr) / rows // frame pixel aspect
+  // In grid units an image w cols by h rows has pixel aspect w*cellAr/h.
+  let w = cols
+  let h = (cols * cellAr) / ia
   if (ia > P) {
-    sw = raster.height * P
-    sx = (raster.width - sw) / 2
-  } else {
-    sh = raster.width / P
-    sy = (raster.height - sh) / 2
+    h = rows
+    w = (rows * ia) / cellAr
   }
-  ctx.drawImage(raster, sx, sy, sw, sh, 0, 0, cols, rows)
+  w *= scale
+  h *= scale
+  ctx.drawImage(raster, (cols - w) / 2, (rows - h) / 2, w, h)
 }
 
-/** `ratio` is the frame's width / height; null keeps the source's own ratio. */
+/** `ratio` is the frame's width / height; null keeps the source's own ratio.
+ *  `scale` sizes the image within that frame; 1 is the fitted size. */
 export function useAsciiArt(
   source: Source | null,
   cols: number,
@@ -82,25 +84,28 @@ export function useAsciiArt(
   tone: ToneSettings,
   motion: MotionSettings,
   playing: boolean,
-  ratio: number | null
+  ratio: number | null,
+  scale: number
 ) {
   const [grid, setGrid] = useState<Grid | null>(null)
   const [renderMs, setRenderMs] = useState(0)
   const sampleCanvas = useRef(document.createElement("canvas"))
   const metricCanvas = useRef(document.createElement("canvas"))
-  const cache = useRef<{ cols: number; rows: number; frame: number | null; rgba: Uint8ClampedArray } | null>(null)
+  const cache = useRef<{ cols: number; rows: number; frame: number | null; scale: number; rgba: Uint8ClampedArray } | null>(null)
 
   // Mid-animation, every frame reads these refs rather than closing over
   // props -- a slider dragged while playing takes effect on the very next
   // frame instead of waiting for the animation loop to restart.
   const sourceRef = useRef(source)
   const ratioRef = useRef(ratio)
+  const scaleRef = useRef(scale)
   const colsRef = useRef(cols)
   const lineHeightRef = useRef(lineHeight)
   const toneRef = useRef(tone)
   const motionRef = useRef(motion)
   sourceRef.current = source
   ratioRef.current = ratio
+  scaleRef.current = scale
   colsRef.current = cols
   lineHeightRef.current = lineHeight
   toneRef.current = tone
@@ -108,7 +113,7 @@ export function useAsciiArt(
 
   useEffect(() => {
     cache.current = null
-  }, [source, cols, lineHeight, ratio])
+  }, [source, cols, lineHeight, ratio, scale])
 
   /** Sample the source (cached by grid size) and build one glyph grid. Pass a
    *  loop phase (0..1) while playing; pass null for a still frame -- motion is
@@ -126,10 +131,11 @@ export function useAsciiArt(
     const mctx = metricCanvas.current.getContext("2d")!
     const ar = cellAspect(mctx, FONT_FAMILY, lineHeight)
     const frame = ratioRef.current
+    const fit = scaleRef.current
     const { cols: c, rows } = gridSize(colsRef.current, source.w, source.h, ar, frame !== null, frame ?? 1, 1)
 
     let rgba: Uint8ClampedArray
-    if (cache.current && cache.current.cols === c && cache.current.rows === rows && cache.current.frame === frame) {
+    if (cache.current && cache.current.cols === c && cache.current.rows === rows && cache.current.frame === frame && cache.current.scale === fit) {
       rgba = cache.current.rgba
     } else {
       const sc = sampleCanvas.current
@@ -140,13 +146,12 @@ export function useAsciiArt(
       sctx.imageSmoothingEnabled = true
       sctx.imageSmoothingQuality = "high"
       try {
-        if (frame === null) sctx.drawImage(source.img, 0, 0, c, rows)
-        else drawCover(sctx, source, c, rows, ar)
+        drawPlaced(sctx, source, c, rows, ar, fit)
         rgba = sctx.getImageData(0, 0, c, rows).data
       } catch {
         rgba = new Uint8ClampedArray(c * rows * 4)
       }
-      cache.current = { cols: c, rows, frame, rgba }
+      cache.current = { cols: c, rows, frame, scale: fit, rgba }
     }
 
     const m = motionRef.current
@@ -167,7 +172,7 @@ export function useAsciiArt(
     const id = requestAnimationFrame(() => sampleAndBuild(null))
     return () => cancelAnimationFrame(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, cols, lineHeight, ratio, JSON.stringify(tone), motion.mode, playing, sampleAndBuild])
+  }, [source, cols, lineHeight, ratio, scale, JSON.stringify(tone), motion.mode, playing, sampleAndBuild])
 
   // Animation loop: advances phase from wall-clock time (so pausing and
   // resuming stays in sync) and re-renders at the target frame rate. Reads
