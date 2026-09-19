@@ -48,6 +48,19 @@ function measureCellWidth(fontPx: number, fontFamily: string) {
   return ctx.measureText("M").width
 }
 
+/** Frame ratios for the stage. "source" keeps the image's own proportions;
+ *  anything else crops the source to fill the new frame edge to edge. */
+const FRAMES = [
+  { id: "source", label: "Source", ratio: null },
+  { id: "1:1", label: "1:1", ratio: 1 },
+  { id: "4:5", label: "4:5", ratio: 4 / 5 },
+  { id: "3:2", label: "3:2", ratio: 3 / 2 },
+  { id: "16:9", label: "16:9", ratio: 16 / 9 },
+  { id: "9:16", label: "9:16", ratio: 9 / 16 },
+] as const
+
+type FrameId = (typeof FRAMES)[number]["id"]
+
 function download(blob: Blob, filename: string) {
   const a = document.createElement("a")
   a.href = URL.createObjectURL(blob)
@@ -93,6 +106,8 @@ export default function App() {
   const [playing, setPlaying] = useState(false)
 
   const [scale, setScale] = useState(2)
+  const [frameId, setFrameId] = useState<FrameId>("source")
+  const frameRatio = FRAMES.find((f) => f.id === frameId)?.ratio ?? null
 
   const tone: ToneSettings = useMemo(
     () => ({
@@ -121,7 +136,7 @@ export default function App() {
   )
   const frameCount = frameCountFor(motion)
 
-  const { grid, renderMs, paintTo, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone, motion, playing)
+  const { grid, renderMs, paintTo, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone, motion, playing, frameRatio)
   const previewRef = useRef<HTMLCanvasElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 })
@@ -255,15 +270,38 @@ export default function App() {
           <div className="stage-ground" />
 
           <div className="relative flex min-h-0 flex-1 flex-col gap-4 px-7 pb-5 pt-6 max-md:gap-2.5 max-md:px-5 max-md:pb-3 max-md:pt-4">
-            {/* The maker's mark, printed on the mount board. */}
-            <header className="shrink-0">
-              <h1 className="font-display text-[22px] font-bold leading-none tracking-[-0.025em] max-md:text-[19px]">
-                Glyphium
-              </h1>
-              <p className="mt-2 text-[10px] uppercase tracking-[0.2em] text-annotation max-md:mt-1.5">
-                Image &rarr; glyph converter
-              </p>
-            </header>
+            <div className="flex shrink-0 flex-wrap items-start justify-between gap-x-6 gap-y-3">
+              {/* The maker's mark, printed on the mount board. */}
+              <header>
+                <h1 className="font-display text-[22px] font-bold leading-none tracking-[-0.025em] max-md:text-[19px]">
+                  Glyphium
+                </h1>
+                <p className="mt-2 text-[10px] uppercase tracking-[0.2em] text-annotation max-md:mt-1.5">
+                  Image &rarr; glyph converter
+                </p>
+              </header>
+
+              {/* Frame ratio. Anything but Source crops the image to fill the new
+                  frame edge to edge, so the effect covers the whole of it. */}
+              <div className="flex items-center gap-2.5">
+                <span className="text-[10px] uppercase tracking-[0.18em] text-annotation max-md:hidden">Frame</span>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  value={frameId}
+                  onValueChange={(v) => v && setFrameId(v as FrameId)}
+                  aria-label="Frame ratio"
+                  className="bg-card/60 backdrop-blur-sm"
+                >
+                  {FRAMES.map((f) => (
+                    <ToggleGroupItem key={f.id} value={f.id} className="h-7 px-2.5 text-[10.5px] tabular-nums">
+                      {f.label}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </div>
+            </div>
 
             <div ref={stageRef} className="flex min-h-0 w-full flex-1 items-center justify-center">
               <div className="relative">
@@ -300,6 +338,7 @@ export default function App() {
             <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[10px] uppercase tracking-[0.15em]">
               <Ann label="file" value={source?.name ?? "none"} />
               <Ann label="source" value={source ? `${source.w}×${source.h}` : "—"} />
+              <Ann label="frame" value={frameId === "source" ? "as source" : frameId} />
               <Ann label="grid" value={grid ? `${grid.cols}×${grid.rows}` : "—"} />
               <Ann label="glyphs" value={grid ? (grid.cols * grid.rows).toLocaleString() : "—"} />
               <Ann label="render" value={`${renderMs} ms`} />

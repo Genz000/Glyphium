@@ -8,7 +8,9 @@ glyphs, colour-mapped through one of ten locked "vibe" palettes (or your own
 paper/ink colours), with control over grid resolution, tone curve,
 dithering, and edge-aware glyph selection for line art. Four motion effects
 (Shimmer, Decode, Wave, Rain) animate the glyphs themselves, looping
-seamlessly. Export as PNG at up to 4×, or as a real, editable SVG.
+seamlessly. Reframe any image to 1:1, 4:5, 3:2, 16:9 or 9:16 — it's cropped
+to fill the new frame edge to edge, never letterboxed. Export as PNG at up to
+4×, or as a real, editable SVG.
 
 ## Stack
 
