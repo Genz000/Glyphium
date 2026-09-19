@@ -72,7 +72,38 @@ function drawPlaced(ctx: CanvasRenderingContext2D, src: Source, cols: number, ro
   }
   w *= scale
   h *= scale
-  ctx.drawImage(raster, (cols - w) / 2, (rows - h) / 2, w, h)
+  const x = (cols - w) / 2
+  const y = (rows - h) / 2
+  ctx.drawImage(raster, x, y, w, h)
+  return { x, y, w, h }
+}
+
+/** When the image is scaled below the frame, the margin around it would be
+ *  empty -- transparent cells that get no glyphs and that motion skips. Carry
+ *  the image's own edge out to the frame instead (clamp to edge): every margin
+ *  cell copies the nearest pixel on the image's border, so the background
+ *  continues seamlessly and the effect covers the whole frame. The image's own
+ *  transparency is untouched -- a cut-out stays a cut-out. */
+function extendEdges(rgba: Uint8ClampedArray, cols: number, rows: number, r: { x: number; y: number; w: number; h: number }) {
+  // Innermost whole cells of the image; its outermost row/column is only
+  // partly covered (anti-aliased), so it isn't a clean colour to repeat.
+  const x0 = clamp(Math.ceil(r.x), 0, cols - 1)
+  const y0 = clamp(Math.ceil(r.y), 0, rows - 1)
+  const x1 = Math.max(x0, clamp(Math.floor(r.x + r.w) - 1, 0, cols - 1))
+  const y1 = Math.max(y0, clamp(Math.floor(r.y + r.h) - 1, 0, rows - 1))
+  if (x0 === 0 && y0 === 0 && x1 === cols - 1 && y1 === rows - 1) return // image already fills the frame
+  for (let y = 0; y < rows; y++) {
+    const sy = clamp(y, y0, y1)
+    for (let x = 0; x < cols; x++) {
+      if (x >= x0 && x <= x1 && y >= y0 && y <= y1) continue
+      const d = (y * cols + x) * 4
+      const s = (sy * cols + clamp(x, x0, x1)) * 4
+      rgba[d] = rgba[s]
+      rgba[d + 1] = rgba[s + 1]
+      rgba[d + 2] = rgba[s + 2]
+      rgba[d + 3] = rgba[s + 3]
+    }
+  }
 }
 
 /** `ratio` is the frame's width / height; null keeps the source's own ratio.
@@ -146,8 +177,9 @@ export function useAsciiArt(
       sctx.imageSmoothingEnabled = true
       sctx.imageSmoothingQuality = "high"
       try {
-        drawPlaced(sctx, source, c, rows, ar, fit)
+        const placed = drawPlaced(sctx, source, c, rows, ar, fit)
         rgba = sctx.getImageData(0, 0, c, rows).data
+        extendEdges(rgba, c, rows, placed)
       } catch {
         rgba = new Uint8ClampedArray(c * rows * 4)
       }
