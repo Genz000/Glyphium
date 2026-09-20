@@ -194,19 +194,10 @@ export function buildLUT(paper: string, stops: string[], strength: number): stri
 /** Build the glyph + colour grid from a sampled RGBA buffer. `anim` is only
  *  passed while a motion effect is playing -- omit it (or pass mode "none")
  *  for a still render. */
-export function buildGrid(rgba: Uint8ClampedArray, cols: number, rows: number, s: ToneSettings, anim?: AnimSettings | null): Grid {
-  const n = cols * rows
-  const chars = s.ramp === "custom" ? s.customRamp || " .:-=+*#%@" : RAMPS[s.ramp]
-  const set = Array.from(chars)
-  const levels = set.length
-
-  const inkL = lumOf(stopsAt(s.stops, 1) as [number, number, number])
-  const paperL = lumOf(hex2rgb(s.paper))
-  const lighterInk = inkL >= paperL
-
+/** Tone (0 = empty, 1 = densest) and alpha for every cell of one image. */
+function toneField(rgba: Uint8ClampedArray, n: number, s: ToneSettings, lighterInk: boolean, paperL: number) {
   const tone = new Float32Array(n)
   const alpha = new Float32Array(n)
-
   for (let i = 0; i < n; i++) {
     const o = i * 4
     const a = rgba[o + 3] / 255
@@ -219,11 +210,82 @@ export function buildGrid(rgba: Uint8ClampedArray, cols: number, rows: number, s
     if (s.invert) t = 1 - t
     tone[i] = clamp(t, 0, 1)
   }
+  return { tone, alpha }
+}
+
+/** The order cells hand over from one image to the next, in the visual
+ *  language of the effect driving the transition: a wave wipes across, rain
+ *  falls down its columns, everything else dissolves cell by cell. */
+function handoverThreshold(mode: AnimMode, x: number, y: number, cols: number, rows: number) {
+  if (mode === "wave") return (x / cols) * 0.75 + (y / rows) * 0.25
+  if (mode === "rain") return clamp((y / rows) * 0.75 + hash2(x, 7) * 0.25, 0, 1)
+  return hash2(x, y) // decode, shimmer, none -- per-cell dissolve
+}
+
+export interface BlendSettings {
+  /** The image being handed over to. */
+  rgbaTo: Uint8ClampedArray
+  /** 0 = all the first image, 1 = all the second. */
+  progress: number
+  /** Effect whose language the handover speaks. */
+  mode: AnimMode
+  /** Frame index, so scrambled glyphs re-roll once per frame. */
+  step: number
+}
+
+export function buildGrid(
+  rgba: Uint8ClampedArray,
+  cols: number,
+  rows: number,
+  s: ToneSettings,
+  anim?: AnimSettings | null,
+  blend?: BlendSettings | null
+): Grid {
+  const n = cols * rows
+  const chars = s.ramp === "custom" ? s.customRamp || " .:-=+*#%@" : RAMPS[s.ramp]
+  const set = Array.from(chars)
+  const levels = set.length
+
+  const inkL = lumOf(stopsAt(s.stops, 1) as [number, number, number])
+  const paperL = lumOf(hex2rgb(s.paper))
+  const lighterInk = inkL >= paperL
+
+  const { tone, alpha } = toneField(rgba, n, s, lighterInk, paperL)
+
+  // Handover to a second image. Each cell flips at its own threshold, so the
+  // two images trade places in the effect's own pattern rather than by a flat
+  // cross-fade. Cells caught mid-flight scramble, which is what makes a decode
+  // handover read as decode.
+  let handover: Int16Array | null = null
+  if (blend) {
+    const to = toneField(blend.rgbaTo, n, s, lighterInk, paperL)
+    const p = clamp(blend.progress, 0, 1)
+    const scramble = blend.mode === "decode" || blend.mode === "none"
+    if (scramble) handover = new Int16Array(n).fill(-1)
+    const BAND = 0.16 // how long a cell spends scrambling as it changes hands
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const i = y * cols + x
+        const thr = handoverThreshold(blend.mode, x, y, cols, rows)
+        if (p > thr) {
+          tone[i] = to.tone[i]
+          alpha[i] = to.alpha[i]
+        }
+        if (handover && Math.abs(p - thr) < BAND && tone[i] > 0.04) {
+          handover[i] = 1 + Math.floor(hash2(x * 31 + blend.step, y * 17 + blend.step * 7) * (levels - 1))
+        }
+      }
+    }
+  }
 
   // Motion modulates tone before quantisation, so the glyphs themselves
   // change rather than a filter running on top of a fixed image.
   let override: Int16Array | null = null
   if (anim && anim.mode !== "none") override = applyAnim(tone, cols, rows, anim, levels)
+  if (handover) {
+    if (!override) override = handover
+    else for (let i = 0; i < n; i++) if (handover[i] >= 0) override[i] = handover[i]
+  }
 
   const q = new Float32Array(tone)
   if (s.dither === "ordered") {

@@ -114,6 +114,8 @@ export default function App() {
   const [scale, setScale] = useState(2)
   const [frameId, setFrameId] = useState<FrameId>("source")
   const [imgScale, setImgScale] = useState(1)
+  const [sourceB, setSourceB] = useState<Source | null>(null)
+  const [transition, setTransition] = useState(0.25)
   const frameRatio = FRAMES.find((f) => f.id === frameId)?.ratio ?? null
 
   const tone: ToneSettings = useMemo(
@@ -143,7 +145,7 @@ export default function App() {
   )
   const frameCount = frameCountFor(motion)
 
-  const { grid, renderMs, paintTo, buildFrame, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone, motion, playing, frameRatio, imgScale)
+  const { grid, renderMs, paintTo, buildFrame, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone, motion, playing, frameRatio, imgScale, sourceB, transition)
   const previewRef = useRef<HTMLCanvasElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 })
@@ -477,6 +479,33 @@ export default function App() {
                   </Button>
                 </div>
               )}
+
+              <Separator />
+
+              {/* Optional second image. With one loaded, the loop plays A, hands
+                  over to B in the effect's own pattern, then hands back. */}
+              <div className="flex items-baseline justify-between">
+                <Label className="text-[11px] font-normal text-muted-foreground">Second image</Label>
+                {sourceB ? (
+                  <Button size="xs" variant="ghost" className="text-[10.5px] text-muted-foreground" onClick={() => setSourceB(null)}>
+                    Remove
+                  </Button>
+                ) : (
+                  <span className="text-[10px] text-annotation">optional</span>
+                )}
+              </div>
+              <FileDrop
+                fileName={sourceB?.name ?? "no second image"}
+                dims={sourceB ? `${sourceB.w} × ${sourceB.h}` : "—"}
+                onLoad={(img, name) => setSourceB({ img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height, name })}
+                onError={(msg) => toast.error("Couldn't open that file", { description: msg })}
+              />
+              {sourceB && (
+                <p className="text-[10px] leading-relaxed text-annotation">
+                  The loop runs {source?.name ?? "the first image"} → {sourceB.name} → back. Pick the effect below; the handover
+                  borrows its pattern.
+                </p>
+              )}
             </Section>
 
             <Section title="Grid" meta="resolution">
@@ -620,6 +649,18 @@ export default function App() {
                   <Control id="anim-dur" label="Loop length" value={animDuration.toFixed(1) + " s"}>
                     <Slider id="anim-dur" min={0.5} max={6} step={0.1} value={[animDuration]} onValueChange={([v]) => setAnimDuration(v)} />
                   </Control>
+                  {sourceB && (
+                    <Control id="anim-cross" label="Handover" value={(animDuration * transition).toFixed(1) + " s"}>
+                      <Slider
+                        id="anim-cross"
+                        min={0.02}
+                        max={0.45}
+                        step={0.01}
+                        value={[transition]}
+                        onValueChange={([v]) => setTransition(v)}
+                      />
+                    </Control>
+                  )}
 
                   <div className="space-y-1.5">
                     <Label className="text-[11px] font-normal text-muted-foreground">Frame rate</Label>

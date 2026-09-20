@@ -6,6 +6,7 @@ import {
   gridSize,
   paint,
   type AnimMode,
+  type BlendSettings,
   type Grid,
   type ToneSettings,
 } from "@/lib/ascii-engine"
@@ -116,18 +117,32 @@ export function useAsciiArt(
   motion: MotionSettings,
   playing: boolean,
   ratio: number | null,
-  scale: number
+  scale: number,
+  sourceB: Source | null,
+  /** Share of the loop each handover takes, 0.02-0.45. */
+  transition: number
 ) {
   const [grid, setGrid] = useState<Grid | null>(null)
   const [renderMs, setRenderMs] = useState(0)
   const sampleCanvas = useRef(document.createElement("canvas"))
   const metricCanvas = useRef(document.createElement("canvas"))
-  const cache = useRef<{ cols: number; rows: number; frame: number | null; scale: number; rgba: Uint8ClampedArray } | null>(null)
+  const cache = useRef<{
+    cols: number
+    rows: number
+    frame: number | null
+    scale: number
+    a: Source | null
+    b: Source | null
+    rgbaA: Uint8ClampedArray
+    rgbaB: Uint8ClampedArray | null
+  } | null>(null)
 
   // Mid-animation, every frame reads these refs rather than closing over
   // props -- a slider dragged while playing takes effect on the very next
   // frame instead of waiting for the animation loop to restart.
   const sourceRef = useRef(source)
+  const sourceBRef = useRef(sourceB)
+  const transitionRef = useRef(transition)
   const ratioRef = useRef(ratio)
   const scaleRef = useRef(scale)
   const colsRef = useRef(cols)
@@ -135,6 +150,8 @@ export function useAsciiArt(
   const toneRef = useRef(tone)
   const motionRef = useRef(motion)
   sourceRef.current = source
+  sourceBRef.current = sourceB
+  transitionRef.current = transition
   ratioRef.current = ratio
   scaleRef.current = scale
   colsRef.current = cols
@@ -144,48 +161,101 @@ export function useAsciiArt(
 
   useEffect(() => {
     cache.current = null
-  }, [source, cols, lineHeight, ratio, scale])
+  }, [source, cols, lineHeight, ratio, scale, sourceB])
 
   /** Sample the source (cached by grid size) and build one glyph grid. Pass a
    *  loop phase (0..1) while playing; pass null for a still frame -- motion is
    *  skipped entirely rather than perturbing at phase 0, so pausing or
    *  switching effects always lands back on the plain image. Stable identity
    *  -- reads everything live via refs so it never needs to be recreated. */
-  const buildAt = useCallback((phase: number | null): Grid | null => {
-    const source = sourceRef.current
-    if (!source) return null
-    const lineHeight = lineHeightRef.current
-    const mctx = metricCanvas.current.getContext("2d")!
-    const ar = cellAspect(mctx, FONT_FAMILY, lineHeight)
-    const frame = ratioRef.current
-    const fit = scaleRef.current
-    const { cols: c, rows } = gridSize(colsRef.current, source.w, source.h, ar, frame !== null, frame ?? 1, 1)
-
-    let rgba: Uint8ClampedArray
-    if (cache.current && cache.current.cols === c && cache.current.rows === rows && cache.current.frame === frame && cache.current.scale === fit) {
-      rgba = cache.current.rgba
-    } else {
-      const sc = sampleCanvas.current
-      sc.width = c
-      sc.height = rows
-      const sctx = sc.getContext("2d", { willReadFrequently: true })!
-      sctx.clearRect(0, 0, c, rows)
-      sctx.imageSmoothingEnabled = true
-      sctx.imageSmoothingQuality = "high"
-      try {
-        const placed = drawPlaced(sctx, source, c, rows, ar, fit)
-        rgba = sctx.getImageData(0, 0, c, rows).data
-        extendEdges(rgba, c, rows, placed)
-      } catch {
-        rgba = new Uint8ClampedArray(c * rows * 4)
-      }
-      cache.current = { cols: c, rows, frame, scale: fit, rgba }
+  /** Sample one image into a cols x rows grid, cover-placed and edge-extended. */
+  const sampleOne = useCallback((src: Source, c: number, rows: number, ar: number, fit: number): Uint8ClampedArray => {
+    const sc = sampleCanvas.current
+    sc.width = c
+    sc.height = rows
+    const sctx = sc.getContext("2d", { willReadFrequently: true })!
+    sctx.clearRect(0, 0, c, rows)
+    sctx.imageSmoothingEnabled = true
+    sctx.imageSmoothingQuality = "high"
+    try {
+      const placed = drawPlaced(sctx, src, c, rows, ar, fit)
+      const d = sctx.getImageData(0, 0, c, rows).data
+      extendEdges(d, c, rows, placed)
+      return d
+    } catch {
+      return new Uint8ClampedArray(c * rows * 4)
     }
-
-    const m = motionRef.current
-    const anim = phase !== null && m.mode !== "none" ? { mode: m.mode, amount: m.amount, phase, frameCount: frameCountFor(m) } : null
-    return buildGrid(rgba, c, rows, toneRef.current, anim)
   }, [])
+
+  const buildAt = useCallback(
+    (phase: number | null): Grid | null => {
+      const source = sourceRef.current
+      if (!source) return null
+      const second = sourceBRef.current
+      const lineHeight = lineHeightRef.current
+      const mctx = metricCanvas.current.getContext("2d")!
+      const ar = cellAspect(mctx, FONT_FAMILY, lineHeight)
+      const frame = ratioRef.current
+      const fit = scaleRef.current
+      // The grid is always sized from the first image, so a second image is
+      // placed into the same frame rather than resizing it.
+      const { cols: c, rows } = gridSize(colsRef.current, source.w, source.h, ar, frame !== null, frame ?? 1, 1)
+
+      const hit =
+        cache.current &&
+        cache.current.cols === c &&
+        cache.current.rows === rows &&
+        cache.current.frame === frame &&
+        cache.current.scale === fit &&
+        cache.current.a === source &&
+        cache.current.b === second
+      if (!hit) {
+        cache.current = {
+          cols: c,
+          rows,
+          frame,
+          scale: fit,
+          a: source,
+          b: second,
+          rgbaA: sampleOne(source, c, rows, ar, fit),
+          rgbaB: second ? sampleOne(second, c, rows, ar, fit) : null,
+        }
+      }
+      const { rgbaA, rgbaB } = cache.current!
+
+      const m = motionRef.current
+      const frames = frameCountFor(m)
+
+      // One image: ambient motion only.
+      if (!rgbaB || phase === null) {
+        const anim = phase !== null && m.mode !== "none" ? { mode: m.mode, amount: m.amount, phase, frameCount: frames } : null
+        return buildGrid(rgbaA, c, rows, toneRef.current, anim)
+      }
+
+      // Two images, so the loop is: hold A, hand over, hold B, hand back.
+      const cross = clamp(transitionRef.current, 0.02, 0.45)
+      const hold = Math.max(0, (1 - 2 * cross) / 2)
+      let rgbaMain = rgbaA
+      let blend: BlendSettings | null = null
+      if (phase < hold) {
+        rgbaMain = rgbaA
+      } else if (phase < hold + cross) {
+        blend = { rgbaTo: rgbaB, progress: (phase - hold) / cross, mode: m.mode, step: Math.floor(phase * frames) }
+      } else if (phase < 2 * hold + cross) {
+        rgbaMain = rgbaB
+      } else {
+        rgbaMain = rgbaB
+        blend = { rgbaTo: rgbaA, progress: (phase - (2 * hold + cross)) / cross, mode: m.mode, step: Math.floor(phase * frames) }
+      }
+
+      // Decode's own cycle would fight the handover, which already scrambles;
+      // the other effects stay ambient right through it.
+      const ambient = m.mode !== "none" && m.mode !== "decode"
+      const anim = ambient ? { mode: m.mode, amount: m.amount, phase, frameCount: frames } : null
+      return buildGrid(rgbaMain, c, rows, toneRef.current, anim, blend)
+    },
+    [sampleOne]
+  )
 
   /** Build one frame of the loop without disturbing the live preview -- used
    *  by the GIF and MP4 exporters, which walk the loop offscreen. */
@@ -212,7 +282,7 @@ export function useAsciiArt(
     const id = requestAnimationFrame(() => sampleAndBuild(null))
     return () => cancelAnimationFrame(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, cols, lineHeight, ratio, scale, JSON.stringify(tone), motion.mode, playing, sampleAndBuild])
+  }, [source, cols, lineHeight, ratio, scale, sourceB, transition, JSON.stringify(tone), motion.mode, playing, sampleAndBuild])
 
   // Animation loop: advances phase from wall-clock time (so pausing and
   // resuming stays in sync) and re-renders at the target frame rate. Reads
@@ -235,7 +305,7 @@ export function useAsciiArt(
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, motion.mode, motion.duration, motion.fps, sampleAndBuild])
+  }, [playing, motion.mode, motion.duration, motion.fps, sourceB, transition, sampleAndBuild])
 
   const paintTo = useCallback(
     (canvas: HTMLCanvasElement, scale: number, paper: string, transparentBg: boolean, forceOpaque = false) => {

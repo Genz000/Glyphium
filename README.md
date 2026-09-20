@@ -8,7 +8,9 @@ glyphs, colour-mapped through one of ten locked "vibe" palettes (or your own
 paper/ink colours), with control over grid resolution, tone curve,
 dithering, and edge-aware glyph selection for line art. Four motion effects
 (Shimmer, Decode, Wave, Rain) animate the glyphs themselves, looping
-seamlessly, and save as an animated GIF or an MP4 for social media. Reframe
+seamlessly, and save as an animated GIF or an MP4 for social media. Load a
+second image and the loop runs A → B → back, with the handover drawn in the
+effect's own pattern. Reframe
 any image to 1:1, 4:5, 3:2, 16:9 or 9:16 — it's cropped to fill the new frame
 edge to edge, never letterboxed — and scale it within that frame. Export a
 still as PNG at up to 4×, or as a real, editable SVG.
@@ -65,6 +67,13 @@ The tone ramp printed under the stage doubles as an editor: click any glyph to
 retype just that tone level — type a replacement or pick one from a small
 block of common glyphs — without hand-editing the whole ramp string. The first
 edit forks the active preset into a custom ramp; the rest of it is untouched.
+
+With a second image loaded, the loop is hold A, hand over, hold B, hand back.
+Cells don't cross-fade: each one flips at its own threshold, ordered by the
+effect driving it -- a wave wipes across, rain falls down its columns,
+decode and shimmer dissolve cell by cell -- and cells caught mid-flight
+scramble, which is what makes a decode handover read as decode. The grid is
+sized from the first image, so the second is placed into the same frame.
 
 Motion is baked into the same tone-mapping step as everything else, not
 layered on top as a filter: each effect perturbs the tone field by loop
