@@ -10,10 +10,10 @@ dithering, and edge-aware glyph selection for line art. Four motion effects
 (Shimmer, Decode, Wave, Rain) animate the glyphs themselves, looping
 seamlessly, and save as an animated GIF or an MP4 for social media. Load a
 second image and the loop runs A → B → back, with the handover drawn in the
-effect's own pattern. Reframe
-any image to 1:1, 4:5, 3:2, 16:9 or 9:16 — it's cropped to fill the new frame
-edge to edge, never letterboxed — and scale it within that frame. Export a
-still as PNG at up to 4×, or as a real, editable SVG.
+effect's own pattern. Reframe any image to 1:1, 4:5, 3:2, 16:9 or 9:16 — it's
+cropped to fill the new frame edge to edge, never letterboxed — and scale it
+within that frame. Export a still as PNG at up to 4×, or as a real, editable
+SVG.
 
 ## Stack
 
