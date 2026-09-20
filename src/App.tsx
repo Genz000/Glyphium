@@ -18,7 +18,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 
 import { FileDrop } from "@/components/file-drop"
 import { VibePicker, ToneLadder } from "@/components/vibe-picker"
-import { frameCountFor, useAsciiArt, type MotionSettings, type Source } from "@/hooks/use-ascii-art"
+import { frameCountFor, useAsciiArt, type Clip, type MotionSettings, type Source } from "@/hooks/use-ascii-art"
+import { TimelineStrip } from "@/components/timeline-strip"
+import { MIN_HOLD, MIN_TRANSITION, phaseOfClipStart, positionAt, totalDuration } from "@/lib/timeline"
 import { clamp, gridToText, gridToSVG, paint, RAMPS, type AnimMode, type ToneSettings, type Vibe } from "@/lib/ascii-engine"
 import { encodeGif } from "@/lib/gif-encoder"
 import { encodeVideo } from "@/lib/video-encoder"
@@ -72,8 +74,18 @@ function download(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000)
 }
 
+const FRAME_EFFECT_LABEL: Record<AnimMode, string> = {
+  none: "Cut",
+  shimmer: "Shimmer",
+  decode: "Decode",
+  wave: "Wave",
+  rain: "Rain",
+}
+
 export default function App() {
-  const [source, setSource] = useState<Source | null>(null)
+  const [clips, setClips] = useState<Clip[]>([])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [playhead, setPlayhead] = useState(0)
 
   // grid / font controls -- a narrow screen cannot resolve 150 columns, so the
   // opening resolution is matched to the viewport. The slider still goes to 300.
@@ -104,7 +116,6 @@ export default function App() {
   // motion
   const [animMode, setAnimMode] = useState<AnimMode>("none")
   const [animAmount, setAnimAmount] = useState(0.45)
-  const [animDuration, setAnimDuration] = useState(2)
   const [fps, setFps] = useState(20)
   const [playing, setPlaying] = useState(false)
   const [outWidth, setOutWidth] = useState(720)
@@ -113,9 +124,7 @@ export default function App() {
 
   const [scale, setScale] = useState(2)
   const [frameId, setFrameId] = useState<FrameId>("source")
-  const [imgScale, setImgScale] = useState(1)
-  const [sourceB, setSourceB] = useState<Source | null>(null)
-  const [transition, setTransition] = useState(0.25)
+
   const frameRatio = FRAMES.find((f) => f.id === frameId)?.ratio ?? null
 
   const tone: ToneSettings = useMemo(
@@ -140,13 +149,29 @@ export default function App() {
   )
 
   const motion: MotionSettings = useMemo(
-    () => ({ mode: animMode, amount: animAmount, duration: animDuration, fps }),
-    [animMode, animAmount, animDuration, fps]
+    () => ({ mode: animMode, amount: animAmount, fps }),
+    [animMode, animAmount, fps]
   )
-  const frameCount = frameCountFor(motion)
+  const frameCount = frameCountFor(clips, fps)
+  const loopSeconds = totalDuration(clips)
+  const selected = clips.find((c) => c.id === selectedId) ?? clips[0] ?? null
+  const selectedIndex = clips.findIndex((c) => c.id === selected?.id)
+  /** Clip the playhead is sitting on -- what the stage is actually showing. */
+  const liveIndex = clips.length ? positionAt(clips, playhead).index : -1
 
-  const { grid, renderMs, paintTo, buildFrame, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone, motion, playing, frameRatio, imgScale, sourceB, transition)
+  const { grid, renderMs, paintTo, buildFrame, fontFamily, baseFont } = useAsciiArt(
+    clips,
+    cols,
+    lh,
+    tone,
+    motion,
+    playing,
+    frameRatio,
+    playhead,
+    setPlayhead
+  )
   const previewRef = useRef<HTMLCanvasElement>(null)
+  const addFileRef = useRef<HTMLInputElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 })
 
@@ -192,13 +217,6 @@ export default function App() {
     cv.style.height = `${Math.round(natural.h * fit)}px`
   }, [grid, natural, paper, transparentBg, paintTo, stageBox])
 
-  // boot: demo SVG
-  useEffect(() => {
-    const src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(DEMO_SVG)
-    const img = new Image()
-    img.onload = () => setSource({ img, w: img.naturalWidth, h: img.naturalHeight, name: "demo-sphere.svg" })
-    img.src = src
-  }, [])
 
   // Spacebar toggles playback, as long as focus isn't in a control that
   // itself uses the key (a text field, a focused slider thumb, a button).
@@ -214,6 +232,73 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [animMode])
+
+  const newClip = (source: Source): Clip => ({
+    id: `clip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    source,
+    scale: 1,
+    hold: 2,
+    transition: 0.6,
+  })
+
+  const addClip = (img: HTMLImageElement, name: string) => {
+    const clip = newClip({ img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height, name })
+    setClips((list) => {
+      const next = [...list, clip]
+      // Jump the playhead to the clip just added, so it's what you see.
+      setPlayhead(phaseOfClipStart(next, next.length - 1))
+      return next
+    })
+    setSelectedId(clip.id)
+    setPlaying(false)
+  }
+
+  const updateClip = (id: string, patch: Partial<Clip>) => setClips((list) => list.map((c) => (c.id === id ? { ...c, ...patch } : c)))
+
+  const removeClip = (id: string) => {
+    setClips((list) => {
+      if (list.length <= 1) return list
+      const next = list.filter((c) => c.id !== id)
+      const at = Math.min(list.findIndex((c) => c.id === id), next.length - 1)
+      setSelectedId(next[at].id)
+      setPlayhead(phaseOfClipStart(next, at))
+      return next
+    })
+  }
+
+  const moveClip = (id: string, dir: -1 | 1) => {
+    setClips((list) => {
+      const i = list.findIndex((c) => c.id === id)
+      const j = i + dir
+      if (i < 0 || j < 0 || j >= list.length) return list
+      const next = [...list]
+      const tmp = next[i]
+      next[i] = next[j]
+      next[j] = tmp
+      setPlayhead(phaseOfClipStart(next, j))
+      return next
+    })
+  }
+
+  const selectClip = (id: string) => {
+    setSelectedId(id)
+    if (!playing) {
+      const i = clips.findIndex((c) => c.id === id)
+      if (i >= 0) setPlayhead(phaseOfClipStart(clips, i))
+    }
+  }
+
+  // boot: demo SVG. Guarded because StrictMode runs effects twice in dev, and
+  // adding the demo twice would fake a two-clip project on first load.
+  const booted = useRef(false)
+  useEffect(() => {
+    if (booted.current) return
+    booted.current = true
+    const src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(DEMO_SVG)
+    const img = new Image()
+    img.onload = () => addClip(img, "demo-sphere.svg")
+    img.src = src
+  }, [])
 
   const selectVibe = (v: Vibe) => {
     setVibeId(v.id)
@@ -233,7 +318,7 @@ export default function App() {
     if (ramp !== "custom") setRamp("custom")
   }
 
-  const baseName = () => (source?.name.replace(/\.[^.]+$/, "") || "glyphium") + "-ascii"
+  const baseName = () => (clips[0]?.source.name.replace(/.[^.]+$/, "") || "glyphium") + "-ascii"
 
   const savePNG = () => {
     if (!grid) return
@@ -428,10 +513,33 @@ export default function App() {
               </div>
             </div>
 
+            {/* The project in time: clips, handovers and the playhead. */}
+            {clips.length > 0 && (
+              <div className="shrink-0 max-md:hidden">
+                <TimelineStrip
+                  clips={clips}
+                  selectedId={selected?.id ?? null}
+                  phase={playhead}
+                  playing={playing}
+                  effectLabel={FRAME_EFFECT_LABEL[animMode]}
+                  onSelect={selectClip}
+                  onSeek={(p) => {
+                    setPlaying(false)
+                    setPlayhead(p)
+                  }}
+                  onRemove={removeClip}
+                  onAdd={() => addFileRef.current?.click()}
+                />
+              </div>
+            )}
+
             {/* Plate margin -- the render is annotated where a proof would be. */}
             <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[10px] uppercase tracking-[0.15em]">
-              <Ann label="file" value={source?.name ?? "none"} />
-              <Ann label="source" value={source ? `${source.w}×${source.h}` : "—"} />
+              <Ann label="file" value={clips[liveIndex]?.source.name ?? "none"} />
+              <Ann
+                label="source"
+                value={clips[liveIndex] ? `${clips[liveIndex].source.w}×${clips[liveIndex].source.h}` : "—"}
+              />
               <Ann label="frame" value={frameId === "source" ? "as source" : frameId} />
               <Ann label="grid" value={grid ? `${grid.cols}×${grid.rows}` : "—"} />
               <Ann label="glyphs" value={grid ? (grid.cols * grid.rows).toLocaleString() : "—"} />
@@ -459,54 +567,113 @@ export default function App() {
         {/* -------------------------------------------------------------- rail */}
         <aside className="flex min-h-0 flex-col border-l bg-card max-md:border-b max-md:border-l-0">
           <ScrollArea className="min-h-0 flex-1 max-md:h-auto">
-            <Section title="Source" meta="image / svg">
+            <Section title="Images" meta="timeline">
               <FileDrop
-                fileName={source?.name ?? "no file loaded"}
-                dims={source ? `${source.w} × ${source.h}` : "—"}
-                onLoad={(img, name) => setSource({ img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height, name })}
+                fileName="drop to add a clip"
+                dims={clips.length ? `${clips.length} on the timeline` : "—"}
+                onLoad={(img, name) => addClip(img, name)}
                 onError={(msg) => toast.error("Couldn't open that file", { description: msg })}
               />
-
-              {/* Sizes the image inside the frame: 100% is the fitted size,
-                  smaller leaves paper around it, larger zooms in. */}
-              <Control id="img-scale" label="Image scale" value={Math.round(imgScale * 100) + "%"}>
-                <Slider id="img-scale" min={0.1} max={3} step={0.01} value={[imgScale]} onValueChange={([v]) => setImgScale(v)} />
-              </Control>
-              {imgScale !== 1 && (
-                <div className="-mt-1.5 flex justify-end">
-                  <Button size="xs" variant="ghost" className="text-[10.5px] text-muted-foreground" onClick={() => setImgScale(1)}>
-                    Reset to fit
-                  </Button>
-                </div>
-              )}
-
-              <Separator />
-
-              {/* Optional second image. With one loaded, the loop plays A, hands
-                  over to B in the effect's own pattern, then hands back. */}
-              <div className="flex items-baseline justify-between">
-                <Label className="text-[11px] font-normal text-muted-foreground">Second image</Label>
-                {sourceB ? (
-                  <Button size="xs" variant="ghost" className="text-[10.5px] text-muted-foreground" onClick={() => setSourceB(null)}>
-                    Remove
-                  </Button>
-                ) : (
-                  <span className="text-[10px] text-annotation">optional</span>
-                )}
-              </div>
-              <FileDrop
-                fileName={sourceB?.name ?? "no second image"}
-                dims={sourceB ? `${sourceB.w} × ${sourceB.h}` : "—"}
-                onLoad={(img, name) => setSourceB({ img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height, name })}
-                onError={(msg) => toast.error("Couldn't open that file", { description: msg })}
-              />
-              {sourceB && (
-                <p className="text-[10px] leading-relaxed text-annotation">
-                  The loop runs {source?.name ?? "the first image"} → {sourceB.name} → back. Pick the effect below; the handover
-                  borrows its pattern.
-                </p>
-              )}
+              <p className="text-[10px] leading-relaxed text-annotation">
+                Every image you add becomes a clip on the timeline under the preview. Each one animates for its own hold, then hands
+                over to the next in the effect's pattern.
+              </p>
             </Section>
+
+            {/* Everything here applies to the selected clip only -- selecting
+                one also moves the playhead to it, so the stage shows what you
+                are editing. */}
+            {selected && (
+              <Section
+                title={`Clip ${selectedIndex + 1}`}
+                meta={clips.length > 1 ? `of ${clips.length}` : "selected"}
+              >
+                <div className="flex items-center gap-2.5">
+                  <img
+                    src={selected.source.img.src}
+                    alt=""
+                    className="size-10 shrink-0 rounded border object-cover"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[11.5px]">{selected.source.name}</div>
+                    <div className="text-[10px] text-annotation">
+                      {selected.source.w} × {selected.source.h}
+                    </div>
+                  </div>
+                  {liveIndex !== selectedIndex && !playing && (
+                    <Badge variant="outline" className="shrink-0 border-border px-1.5 py-0 text-[9px] uppercase text-annotation">
+                      off playhead
+                    </Badge>
+                  )}
+                </div>
+
+                <Control id="clip-scale" label="Scale in frame" value={Math.round(selected.scale * 100) + "%"}>
+                  <Slider
+                    id="clip-scale"
+                    min={0.1}
+                    max={3}
+                    step={0.01}
+                    value={[selected.scale]}
+                    onValueChange={([v]) => updateClip(selected.id, { scale: v })}
+                  />
+                </Control>
+                {selected.scale !== 1 && (
+                  <div className="-mt-1.5 flex justify-end">
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="text-[10.5px] text-muted-foreground"
+                      onClick={() => updateClip(selected.id, { scale: 1 })}
+                    >
+                      Reset to fit
+                    </Button>
+                  </div>
+                )}
+
+                <Control id="clip-hold" label="Hold" value={selected.hold.toFixed(1) + " s"}>
+                  <Slider
+                    id="clip-hold"
+                    min={MIN_HOLD}
+                    max={8}
+                    step={0.1}
+                    value={[selected.hold]}
+                    onValueChange={([v]) => updateClip(selected.id, { hold: v })}
+                  />
+                </Control>
+
+                {clips.length > 1 && (
+                  <Control id="clip-cross" label={`Handover to ${selectedIndex + 2 > clips.length ? 1 : selectedIndex + 2}`} value={selected.transition.toFixed(1) + " s"}>
+                    <Slider
+                      id="clip-cross"
+                      min={MIN_TRANSITION}
+                      max={4}
+                      step={0.1}
+                      value={[selected.transition]}
+                      onValueChange={([v]) => updateClip(selected.id, { transition: v })}
+                    />
+                  </Control>
+                )}
+
+                {clips.length > 1 && (
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <Button size="sm" variant="outline" disabled={selectedIndex <= 0} onClick={() => moveClip(selected.id, -1)}>
+                      ← Move
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={selectedIndex >= clips.length - 1}
+                      onClick={() => moveClip(selected.id, 1)}
+                    >
+                      Move →
+                    </Button>
+                    <Button size="sm" variant="destructive" onClick={() => removeClip(selected.id)}>
+                      Remove
+                    </Button>
+                  </div>
+                )}
+              </Section>
+            )}
 
             <Section title="Grid" meta="resolution">
               <Control id="cols" label="Columns" value={cols}>
@@ -646,21 +813,6 @@ export default function App() {
                   <Control id="anim-amt" label="Amount" value={Math.round(animAmount * 100) + "%"}>
                     <Slider id="anim-amt" min={0.05} max={1} step={0.01} value={[animAmount]} onValueChange={([v]) => setAnimAmount(v)} />
                   </Control>
-                  <Control id="anim-dur" label="Loop length" value={animDuration.toFixed(1) + " s"}>
-                    <Slider id="anim-dur" min={0.5} max={6} step={0.1} value={[animDuration]} onValueChange={([v]) => setAnimDuration(v)} />
-                  </Control>
-                  {sourceB && (
-                    <Control id="anim-cross" label="Handover" value={(animDuration * transition).toFixed(1) + " s"}>
-                      <Slider
-                        id="anim-cross"
-                        min={0.02}
-                        max={0.45}
-                        step={0.01}
-                        value={[transition]}
-                        onValueChange={([v]) => setTransition(v)}
-                      />
-                    </Control>
-                  )}
 
                   <div className="space-y-1.5">
                     <Label className="text-[11px] font-normal text-muted-foreground">Frame rate</Label>
@@ -685,7 +837,8 @@ export default function App() {
                     {playing ? "Pause animation" : "Play animation"}
                   </Button>
                   <p className="text-center text-[10px] text-annotation">
-                    {frameCount} frames · {(frameCount / fps).toFixed(1)} s loop · {fps} fps
+                    {frameCount} frames · {loopSeconds.toFixed(1)} s loop · {fps} fps
+                    {clips.length > 1 ? ` · ${clips.length} clips` : ""}
                   </p>
 
                   <Separator />
@@ -715,7 +868,7 @@ export default function App() {
                         <SelectContent>
                           {[1, 2, 3, 4, 6].map((n) => (
                             <SelectItem key={n} value={String(n)}>
-                              {n}× — {((frameCount * n) / fps).toFixed(1)} s
+                              {n}× — {(loopSeconds * n).toFixed(1)} s
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -791,6 +944,23 @@ export default function App() {
           </div>
         </aside>
       </div>
+
+      <input
+        ref={addFileRef}
+        type="file"
+        hidden
+        accept="image/*,.svg,.png,.jpg,.jpeg,.webp,.gif"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          e.target.value = ""
+          if (!file) return
+          const url = URL.createObjectURL(file)
+          const img = new Image()
+          img.onload = () => addClip(img, file.name)
+          img.onerror = () => toast.error("Couldn't open that file", { description: "unsupported or damaged image" })
+          img.src = url
+        }}
+      />
 
       <Toaster position="bottom-right" toastOptions={{ className: "font-mono text-[11.5px]" }} />
     </TooltipProvider>

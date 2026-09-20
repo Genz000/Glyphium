@@ -10,6 +10,7 @@ import {
   type Grid,
   type ToneSettings,
 } from "@/lib/ascii-engine"
+import { positionAt, totalDuration, type ClipTiming } from "@/lib/timeline"
 
 const FONT_FAMILY = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace'
 const BASE_FONT = 14
@@ -21,17 +22,23 @@ export interface Source {
   name: string
 }
 
+/** One image on the timeline, with its own framing and timing. */
+export interface Clip extends ClipTiming {
+  id: string
+  source: Source
+  /** Size of this image inside the frame; 1 is the fitted size. */
+  scale: number
+}
+
 export interface MotionSettings {
   mode: AnimMode
   /** Perturbation strength, 0..1. */
   amount: number
-  /** Loop length in seconds. */
-  duration: number
   fps: number
 }
 
-/** Frames in one loop, clamped the same way the standalone prototype did. */
-export const frameCountFor = (m: Pick<MotionSettings, "duration" | "fps">) => clamp(Math.round(m.duration * m.fps), 2, 150)
+/** Frames in one loop, clamped so a long project can't run away. */
+export const frameCountFor = (clips: ClipTiming[], fps: number) => clamp(Math.round(totalDuration(clips) * fps), 2, 600)
 
 /** The source flattened to a bitmap once, so it can be cropped. An SVG with no
  *  intrinsic size maps a drawImage source rectangle onto the wrong coordinate
@@ -107,69 +114,60 @@ function extendEdges(rgba: Uint8ClampedArray, cols: number, rows: number, r: { x
   }
 }
 
-/** `ratio` is the frame's width / height; null keeps the source's own ratio.
- *  `scale` sizes the image within that frame; 1 is the fitted size. */
+interface CacheEntry {
+  cols: number
+  rows: number
+  frame: number | null
+  scale: number
+  src: Source
+  rgba: Uint8ClampedArray
+}
+
+/** `ratio` is the frame's width / height; null keeps the first clip's own
+ *  ratio. `playhead` (0..1) is what the preview shows while paused, so the
+ *  stage always matches the clip you are working on. */
 export function useAsciiArt(
-  source: Source | null,
+  clips: Clip[],
   cols: number,
   lineHeight: number,
   tone: ToneSettings,
   motion: MotionSettings,
   playing: boolean,
   ratio: number | null,
-  scale: number,
-  sourceB: Source | null,
-  /** Share of the loop each handover takes, 0.02-0.45. */
-  transition: number
+  playhead: number,
+  onPhase?: (phase: number) => void
 ) {
   const [grid, setGrid] = useState<Grid | null>(null)
   const [renderMs, setRenderMs] = useState(0)
   const sampleCanvas = useRef(document.createElement("canvas"))
   const metricCanvas = useRef(document.createElement("canvas"))
-  const cache = useRef<{
-    cols: number
-    rows: number
-    frame: number | null
-    scale: number
-    a: Source | null
-    b: Source | null
-    rgbaA: Uint8ClampedArray
-    rgbaB: Uint8ClampedArray | null
-  } | null>(null)
+  const cache = useRef(new Map<string, CacheEntry>())
 
   // Mid-animation, every frame reads these refs rather than closing over
   // props -- a slider dragged while playing takes effect on the very next
   // frame instead of waiting for the animation loop to restart.
-  const sourceRef = useRef(source)
-  const sourceBRef = useRef(sourceB)
-  const transitionRef = useRef(transition)
+  const clipsRef = useRef(clips)
   const ratioRef = useRef(ratio)
-  const scaleRef = useRef(scale)
   const colsRef = useRef(cols)
   const lineHeightRef = useRef(lineHeight)
   const toneRef = useRef(tone)
   const motionRef = useRef(motion)
-  sourceRef.current = source
-  sourceBRef.current = sourceB
-  transitionRef.current = transition
+  const onPhaseRef = useRef(onPhase)
+  clipsRef.current = clips
   ratioRef.current = ratio
-  scaleRef.current = scale
   colsRef.current = cols
   lineHeightRef.current = lineHeight
   toneRef.current = tone
   motionRef.current = motion
+  onPhaseRef.current = onPhase
 
-  useEffect(() => {
-    cache.current = null
-  }, [source, cols, lineHeight, ratio, scale, sourceB])
-
-  /** Sample the source (cached by grid size) and build one glyph grid. Pass a
-   *  loop phase (0..1) while playing; pass null for a still frame -- motion is
-   *  skipped entirely rather than perturbing at phase 0, so pausing or
-   *  switching effects always lands back on the plain image. Stable identity
-   *  -- reads everything live via refs so it never needs to be recreated. */
-  /** Sample one image into a cols x rows grid, cover-placed and edge-extended. */
-  const sampleOne = useCallback((src: Source, c: number, rows: number, ar: number, fit: number): Uint8ClampedArray => {
+  /** Sample one clip into a cols x rows grid, cover-placed and edge-extended.
+   *  Cached per clip, since only the clip being edited needs resampling. */
+  const sampleClip = useCallback((clip: Clip, c: number, rows: number, ar: number, frame: number | null): Uint8ClampedArray => {
+    const hit = cache.current.get(clip.id)
+    if (hit && hit.cols === c && hit.rows === rows && hit.frame === frame && hit.scale === clip.scale && hit.src === clip.source) {
+      return hit.rgba
+    }
     const sc = sampleCanvas.current
     sc.width = c
     sc.height = rows
@@ -177,92 +175,75 @@ export function useAsciiArt(
     sctx.clearRect(0, 0, c, rows)
     sctx.imageSmoothingEnabled = true
     sctx.imageSmoothingQuality = "high"
+    let rgba: Uint8ClampedArray
     try {
-      const placed = drawPlaced(sctx, src, c, rows, ar, fit)
-      const d = sctx.getImageData(0, 0, c, rows).data
-      extendEdges(d, c, rows, placed)
-      return d
+      const placed = drawPlaced(sctx, clip.source, c, rows, ar, clip.scale)
+      rgba = sctx.getImageData(0, 0, c, rows).data
+      extendEdges(rgba, c, rows, placed)
     } catch {
-      return new Uint8ClampedArray(c * rows * 4)
+      rgba = new Uint8ClampedArray(c * rows * 4)
     }
+    cache.current.set(clip.id, { cols: c, rows, frame, scale: clip.scale, src: clip.source, rgba })
+    return rgba
   }, [])
 
+  /** Build the grid for one point on the timeline. */
   const buildAt = useCallback(
-    (phase: number | null): Grid | null => {
-      const source = sourceRef.current
-      if (!source) return null
-      const second = sourceBRef.current
+    (phase: number): Grid | null => {
+      const list = clipsRef.current
+      if (list.length === 0) return null
+      const first = list[0].source
       const lineHeight = lineHeightRef.current
       const mctx = metricCanvas.current.getContext("2d")!
       const ar = cellAspect(mctx, FONT_FAMILY, lineHeight)
       const frame = ratioRef.current
-      const fit = scaleRef.current
-      // The grid is always sized from the first image, so a second image is
-      // placed into the same frame rather than resizing it.
-      const { cols: c, rows } = gridSize(colsRef.current, source.w, source.h, ar, frame !== null, frame ?? 1, 1)
-
-      const hit =
-        cache.current &&
-        cache.current.cols === c &&
-        cache.current.rows === rows &&
-        cache.current.frame === frame &&
-        cache.current.scale === fit &&
-        cache.current.a === source &&
-        cache.current.b === second
-      if (!hit) {
-        cache.current = {
-          cols: c,
-          rows,
-          frame,
-          scale: fit,
-          a: source,
-          b: second,
-          rgbaA: sampleOne(source, c, rows, ar, fit),
-          rgbaB: second ? sampleOne(second, c, rows, ar, fit) : null,
-        }
-      }
-      const { rgbaA, rgbaB } = cache.current!
+      // The grid is sized from the first clip, so every other image is placed
+      // into the same frame instead of resizing it.
+      const { cols: c, rows } = gridSize(colsRef.current, first.w, first.h, ar, frame !== null, frame ?? 1, 1)
 
       const m = motionRef.current
-      const frames = frameCountFor(m)
+      const frames = frameCountFor(list, m.fps)
+      const pos = positionAt(list, phase)
+      const clip = list[Math.min(pos.index, list.length - 1)]
+      const rgba = sampleClip(clip, c, rows, ar, frame)
 
-      // One image: ambient motion only.
-      if (!rgbaB || phase === null) {
-        const anim = phase !== null && m.mode !== "none" ? { mode: m.mode, amount: m.amount, phase, frameCount: frames } : null
-        return buildGrid(rgbaA, c, rows, toneRef.current, anim)
-      }
-
-      // Two images, so the loop is: hold A, hand over, hold B, hand back.
-      const cross = clamp(transitionRef.current, 0.02, 0.45)
-      const hold = Math.max(0, (1 - 2 * cross) / 2)
-      let rgbaMain = rgbaA
       let blend: BlendSettings | null = null
-      if (phase < hold) {
-        rgbaMain = rgbaA
-      } else if (phase < hold + cross) {
-        blend = { rgbaTo: rgbaB, progress: (phase - hold) / cross, mode: m.mode, step: Math.floor(phase * frames) }
-      } else if (phase < 2 * hold + cross) {
-        rgbaMain = rgbaB
-      } else {
-        rgbaMain = rgbaB
-        blend = { rgbaTo: rgbaA, progress: (phase - (2 * hold + cross)) / cross, mode: m.mode, step: Math.floor(phase * frames) }
+      if (pos.progress !== null && pos.next !== pos.index) {
+        const to = list[pos.next]
+        blend = {
+          rgbaTo: sampleClip(to, c, rows, ar, frame),
+          progress: pos.progress,
+          mode: m.mode,
+          step: Math.floor(phase * frames),
+        }
       }
 
-      // Decode's own cycle would fight the handover, which already scrambles;
-      // the other effects stay ambient right through it.
-      const ambient = m.mode !== "none" && m.mode !== "decode"
-      const anim = ambient ? { mode: m.mode, amount: m.amount, phase, frameCount: frames } : null
-      return buildGrid(rgbaMain, c, rows, toneRef.current, anim, blend)
+      // Each clip animates through its whole hold. Decode gets one complete
+      // cycle per hold -- scramble, resolve, dissolve -- so an image reads as
+      // "decoding itself" before it hands over; the continuous effects run off
+      // the loop phase so they never jump at a clip boundary. During a
+      // handover decode steps aside, because the handover is already
+      // scrambling and the two would fight.
+      let anim = null
+      if (m.mode !== "none") {
+        if (m.mode === "decode") {
+          if (!blend) anim = { mode: m.mode, amount: m.amount, phase: pos.holdProgress, frameCount: frames }
+        } else {
+          anim = { mode: m.mode, amount: m.amount, phase, frameCount: frames }
+        }
+      }
+
+      return buildGrid(rgba, c, rows, toneRef.current, anim, blend)
     },
-    [sampleOne]
+    [sampleClip]
   )
 
-  /** Build one frame of the loop without disturbing the live preview -- used
-   *  by the GIF and MP4 exporters, which walk the loop offscreen. */
+  /** Build one frame without disturbing the live preview -- used by the GIF
+   *  and MP4 exporters, which walk the loop offscreen. */
   const buildFrame = useCallback((phase: number) => buildAt(phase), [buildAt])
 
-  const sampleAndBuild = useCallback(
-    (phase: number | null) => {
+  const render = useCallback(
+    (phase: number) => {
       const t0 = performance.now()
       const g = buildAt(phase)
       setGrid(g)
@@ -271,41 +252,37 @@ export function useAsciiArt(
     [buildAt]
   )
 
-  // Still render: rebuild once whenever a setting actually changes, always at
-  // a null (unperturbed) phase. Skipped while playing -- the animation loop
-  // below owns rendering in that case, so this would otherwise fight it and
-  // jump the preview back to phase 0. Reacts to motion.mode too, so picking a
-  // different effect (or switching back to "none") while paused clears
-  // whatever mid-loop frame was on screen instead of leaving it stuck.
+  // Paused: show the playhead's frame, so the stage always matches the clip
+  // being edited and scrubbing the timeline works.
   useEffect(() => {
     if (playing) return
-    const id = requestAnimationFrame(() => sampleAndBuild(null))
+    const id = requestAnimationFrame(() => render(playhead))
     return () => cancelAnimationFrame(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, cols, lineHeight, ratio, scale, sourceB, transition, JSON.stringify(tone), motion.mode, playing, sampleAndBuild])
+  }, [clips, cols, lineHeight, ratio, playhead, JSON.stringify(tone), motion.mode, motion.amount, playing, render])
 
-  // Animation loop: advances phase from wall-clock time (so pausing and
-  // resuming stays in sync) and re-renders at the target frame rate. Reads
-  // live tone/motion off the refs above, so tweaking a slider mid-loop is
-  // reflected on the very next frame.
+  // Playing: advance the phase from wall-clock time at the target frame rate,
+  // reporting it back so the timeline's playhead can follow.
   useEffect(() => {
-    if (!playing || motion.mode === "none") return
+    if (!playing || clips.length === 0) return
     let raf = 0
     let last = 0
-    const t0 = performance.now()
+    const total = Math.max(0.1, totalDuration(clipsRef.current))
+    const t0 = performance.now() - playhead * total * 1000
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick)
       const interval = 1000 / motionRef.current.fps
       if (now - last < interval - 1) return
       last = now
-      const frames = frameCountFor(motionRef.current)
-      const loopMs = (frames / motionRef.current.fps) * 1000
-      sampleAndBuild(((now - t0) % loopMs) / loopMs)
+      const loopMs = Math.max(100, totalDuration(clipsRef.current) * 1000)
+      const phase = (((now - t0) % loopMs) / loopMs + 1) % 1
+      onPhaseRef.current?.(phase)
+      render(phase)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, motion.mode, motion.duration, motion.fps, sourceB, transition, sampleAndBuild])
+  }, [playing, motion.fps, render])
 
   const paintTo = useCallback(
     (canvas: HTMLCanvasElement, scale: number, paper: string, transparentBg: boolean, forceOpaque = false) => {
