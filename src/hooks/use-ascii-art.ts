@@ -151,13 +151,9 @@ export function useAsciiArt(
    *  skipped entirely rather than perturbing at phase 0, so pausing or
    *  switching effects always lands back on the plain image. Stable identity
    *  -- reads everything live via refs so it never needs to be recreated. */
-  const sampleAndBuild = useCallback((phase: number | null) => {
+  const buildAt = useCallback((phase: number | null): Grid | null => {
     const source = sourceRef.current
-    if (!source) {
-      setGrid(null)
-      return
-    }
-    const t0 = performance.now()
+    if (!source) return null
     const lineHeight = lineHeightRef.current
     const mctx = metricCanvas.current.getContext("2d")!
     const ar = cellAspect(mctx, FONT_FAMILY, lineHeight)
@@ -188,10 +184,22 @@ export function useAsciiArt(
 
     const m = motionRef.current
     const anim = phase !== null && m.mode !== "none" ? { mode: m.mode, amount: m.amount, phase, frameCount: frameCountFor(m) } : null
-    const g = buildGrid(rgba, c, rows, toneRef.current, anim)
-    setGrid(g)
-    setRenderMs(Math.round(performance.now() - t0))
+    return buildGrid(rgba, c, rows, toneRef.current, anim)
   }, [])
+
+  /** Build one frame of the loop without disturbing the live preview -- used
+   *  by the GIF and MP4 exporters, which walk the loop offscreen. */
+  const buildFrame = useCallback((phase: number) => buildAt(phase), [buildAt])
+
+  const sampleAndBuild = useCallback(
+    (phase: number | null) => {
+      const t0 = performance.now()
+      const g = buildAt(phase)
+      setGrid(g)
+      if (g) setRenderMs(Math.round(performance.now() - t0))
+    },
+    [buildAt]
+  )
 
   // Still render: rebuild once whenever a setting actually changes, always at
   // a null (unperturbed) phase. Skipped while playing -- the animation loop
@@ -237,5 +245,5 @@ export function useAsciiArt(
     [grid, lineHeight]
   )
 
-  return { grid, renderMs, paintTo, fontFamily: FONT_FAMILY, baseFont: BASE_FONT }
+  return { grid, renderMs, paintTo, buildFrame, fontFamily: FONT_FAMILY, baseFont: BASE_FONT }
 }

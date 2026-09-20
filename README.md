@@ -8,9 +8,10 @@ glyphs, colour-mapped through one of ten locked "vibe" palettes (or your own
 paper/ink colours), with control over grid resolution, tone curve,
 dithering, and edge-aware glyph selection for line art. Four motion effects
 (Shimmer, Decode, Wave, Rain) animate the glyphs themselves, looping
-seamlessly. Reframe any image to 1:1, 4:5, 3:2, 16:9 or 9:16 — it's cropped
-to fill the new frame edge to edge, never letterboxed. Export as PNG at up to
-4×, or as a real, editable SVG.
+seamlessly, and save as an animated GIF or an MP4 for social media. Reframe
+any image to 1:1, 4:5, 3:2, 16:9 or 9:16 — it's cropped to fill the new frame
+edge to edge, never letterboxed — and scale it within that frame. Export a
+still as PNG at up to 4×, or as a real, editable SVG.
 
 ## Stack
 
@@ -104,10 +105,13 @@ gamma), ordered and diffusion dithering, edge-aware glyphs, ten colour vibes
 with custom paper/ink, source-colour tinting, transparency, the live motion
 system (Shimmer, Decode, Wave, Rain), and PNG/SVG export.
 
-Not yet ported from the prototype: pan/zoom stage controls, and baking the
-motion into a file (GIF/WebM/animated-SVG export) -- today, motion is a
-live preview only, with the still exports capturing whichever frame is
-current. Both are straightforward to add on top of the same engine -- the
+Motion saves to GIF (a self-contained GIF89a encoder: median-cut palette,
+LZW, delta frames) and to MP4/H.264, encoded frame by frame through
+WebCodecs so timing is exact rather than captured in real time. Browsers
+without WebCodecs fall back to MediaRecorder.
+
+Not yet ported from the prototype: pan/zoom stage controls and animated-SVG
+export. Both are straightforward to add on top of the same engine -- the
 pixel sampling and grid-building functions are already frame-agnostic.
 
 ## License

@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Separator } from "@/components/ui/separator"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { Toaster } from "@/components/ui/sonner"
@@ -18,7 +19,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { FileDrop } from "@/components/file-drop"
 import { VibePicker, ToneLadder } from "@/components/vibe-picker"
 import { frameCountFor, useAsciiArt, type MotionSettings, type Source } from "@/hooks/use-ascii-art"
-import { clamp, gridToText, gridToSVG, RAMPS, type AnimMode, type ToneSettings, type Vibe } from "@/lib/ascii-engine"
+import { clamp, gridToText, gridToSVG, paint, RAMPS, type AnimMode, type ToneSettings, type Vibe } from "@/lib/ascii-engine"
+import { encodeGif } from "@/lib/gif-encoder"
+import { encodeVideo } from "@/lib/video-encoder"
 import { cn } from "@/lib/utils"
 
 const DEMO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600">
@@ -104,6 +107,9 @@ export default function App() {
   const [animDuration, setAnimDuration] = useState(2)
   const [fps, setFps] = useState(20)
   const [playing, setPlaying] = useState(false)
+  const [outWidth, setOutWidth] = useState(720)
+  const [loops, setLoops] = useState(2)
+  const [exporting, setExporting] = useState<{ what: string; pct: number } | null>(null)
 
   const [scale, setScale] = useState(2)
   const [frameId, setFrameId] = useState<FrameId>("source")
@@ -137,7 +143,7 @@ export default function App() {
   )
   const frameCount = frameCountFor(motion)
 
-  const { grid, renderMs, paintTo, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone, motion, playing, frameRatio, imgScale)
+  const { grid, renderMs, paintTo, buildFrame, fontFamily, baseFont } = useAsciiArt(source, cols, lh, tone, motion, playing, frameRatio, imgScale)
   const previewRef = useRef<HTMLCanvasElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 })
@@ -238,6 +244,91 @@ export default function App() {
       }
     }, "image/png")
   }
+
+  /** Renders the loop offscreen at a fixed pixel size. Dimensions are forced
+   *  even because H.264 encodes in 2x2 chroma blocks and rejects odd sizes. */
+  const frameRenderer = (frames: number, targetW: number) => {
+    const probe = buildFrame(0)
+    if (!probe) throw new Error("nothing to render")
+    const fontPx = (baseFont * targetW) / (cellWidth(baseFont) * probe.cols)
+    const w = Math.max(2, Math.round(cellWidth(fontPx) * probe.cols))
+    const h = Math.max(2, Math.round(fontPx * lh * probe.rows))
+    const W = w - (w % 2)
+    const H = h - (h % 2)
+    const tmp = document.createElement("canvas")
+    const out = document.createElement("canvas")
+    out.width = W
+    out.height = H
+    const ctx = out.getContext("2d", { willReadFrequently: true })!
+    const draw = (i: number) => {
+      const g = buildFrame((i % frames) / frames)
+      if (g) {
+        // Always opaque: neither MP4 nor a delta-coded GIF carries alpha.
+        paint(tmp, g, fontPx, lh, fontFamily, paper, false, true)
+        ctx.drawImage(tmp, 0, 0)
+      }
+      return out
+    }
+    return { W, H, draw, ctx }
+  }
+
+  const runExport = async (what: string, job: (report: (done: number, total: number) => void) => Promise<void>) => {
+    if (!grid) return
+    if (animMode === "none") {
+      toast.error("No motion to save", { description: "Choose a motion effect first." })
+      return
+    }
+    setPlaying(false)
+    setExporting({ what, pct: 0 })
+    try {
+      await job((done, total) => setExporting({ what, pct: Math.round((done / total) * 100) }))
+    } catch (e) {
+      toast.error(`${what} export failed`, { description: e instanceof Error ? e.message : "unknown error" })
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  const saveGIF = () =>
+    runExport("GIF", async (report) => {
+      const frames = frameCount
+      const r = frameRenderer(frames, outWidth)
+      const { blob, colors } = await encodeGif({
+        width: r.W,
+        height: r.H,
+        frames,
+        delayCs: Math.max(2, Math.round(100 / fps)),
+        maxColors: 64,
+        paper,
+        renderFrame: (i) => {
+          r.draw(i)
+          return r.ctx.getImageData(0, 0, r.W, r.H).data
+        },
+        onProgress: report,
+      })
+      download(blob, `${baseName()}.gif`)
+      toast.success("Saved GIF", {
+        description: `${r.W} × ${r.H} · ${frames} frames · ${colors} colours · ${(blob.size / 1048576).toFixed(1)} MB`,
+      })
+    })
+
+  const saveVideo = () =>
+    runExport("MP4", async (report) => {
+      const frames = frameCount
+      const r = frameRenderer(frames, outWidth)
+      const { blob, ext } = await encodeVideo({
+        width: r.W,
+        height: r.H,
+        frames: frames * loops,
+        fps,
+        renderFrame: (i) => r.draw(i),
+        onProgress: report,
+      })
+      download(blob, `${baseName()}.${ext}`)
+      toast.success(`Saved ${ext.toUpperCase()}`, {
+        description: `${r.W} × ${r.H} · ${((frames * loops) / fps).toFixed(1)} s · ${(blob.size / 1048576).toFixed(1)} MB`,
+      })
+    })
 
   const saveSVG = () => {
     if (!grid) return
@@ -555,6 +646,60 @@ export default function App() {
                   <p className="text-center text-[10px] text-annotation">
                     {frameCount} frames · {(frameCount / fps).toFixed(1)} s loop · {fps} fps
                   </p>
+
+                  <Separator />
+
+                  {/* Save the loop as a file. GIF plays anywhere; MP4 (H.264)
+                      is what social platforms want. */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="out-width" className="text-[11px] font-normal text-muted-foreground">Width</Label>
+                      <Select value={String(outWidth)} onValueChange={(v) => setOutWidth(Number(v))}>
+                        <SelectTrigger id="out-width" size="sm" className="w-full text-[11.5px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[480, 720, 1080, 1440].map((w) => (
+                            <SelectItem key={w} value={String(w)}>{w} px</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="out-loops" className="text-[11px] font-normal text-muted-foreground">Video repeats</Label>
+                      <Select value={String(loops)} onValueChange={(v) => setLoops(Number(v))}>
+                        <SelectTrigger id="out-loops" size="sm" className="w-full text-[11.5px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[1, 2, 3, 4, 6].map((n) => (
+                            <SelectItem key={n} value={String(n)}>
+                              {n}× — {((frameCount * n) / fps).toFixed(1)} s
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button size="sm" variant="outline" onClick={saveGIF} disabled={!grid || exporting !== null}>
+                          {exporting?.what === "GIF" ? `GIF ${exporting.pct}%` : "Save GIF"}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Loops forever, plays anywhere</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button size="sm" onClick={saveVideo} disabled={!grid || exporting !== null}>
+                          {exporting?.what === "MP4" ? `MP4 ${exporting.pct}%` : "Save MP4"}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>H.264 — for social media</TooltipContent>
+                    </Tooltip>
+                  </div>
                 </>
               )}
             </Section>
